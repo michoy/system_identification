@@ -3,8 +3,12 @@ Script that prepares data for later usage
 
 """
 
+from functools import reduce
 from pathlib import Path
 from typing import List, Dict
+import cProfile
+import io
+import pstats
 
 import pandas as pd
 import numpy as np
@@ -67,7 +71,26 @@ def recreate_sampling_times(
     duration = end_time - start_time
     timesteps = np.arange(0, duration, step_length)
     new_columns = [pd.Series(timesteps, name="Time")]
-    columns_except_time = data.columns.difference(["Time"])
+    columns_except_time = data.columns.difference(
+        [
+            "Time",
+            "child_frame_id",
+            "header.frame_id",
+            "header.seq",
+            "header.stamp.nsecs",
+            "header.stamp.secs",
+            "pose.covariance",
+            "twist.covariance",
+            "pins_0",
+            "pins_1",
+            "pins_2",
+            "pins_3",
+            "pins_4",
+            "pins_5",
+            "pins_6",
+            "pins_7",
+        ]
+    )
 
     for col_name in columns_except_time:
         f = interp1d(shifted_timestamps.values, data[col_name].values)
@@ -87,19 +110,60 @@ def recreate_sampling_times(
     return data_new
 
 
-def bag_to_dataframe(bagpath: Path, topics: List[str]) -> Dict[str, DataFrame]:
-    bag = bagpy.bagreader(bagpath)
+def bag_to_dataframes(bagpath: Path, topics: List[str]) -> Dict[str, DataFrame]:
+    bag = bagpy.bagreader(str(bagpath))
     dataframes = dict()
 
     for topic in topics:
         topic_msgs = bag.message_by_topic(topic)
         dataframes[topic] = pd.read_csv(topic_msgs)
+        columns_except_time = dataframes[topic].columns.difference(["Time"])
 
     return dataframes
 
 
-def sychronize_bag_measurements(bagpath: Path, topics: List[str]):
-    pass
+def bag_to_dataframe(bagpath: Path, topics: List[str], step_length: float) -> DataFrame:
+    """Function for converting messages on topics in a bag into a single
+    dataframe with equal timesteps. Uses 1d interpolation to synchronize
+    topics.
+
+    Args:
+        bagpath (Path): path to bag file
+        topics (List[str]): list of topics that should be converted
+        step_length (float): length between timesteps in the new dataframe
+
+    Returns:
+        DataFrame: dataframe containing the desired topics
+    """
+
+    # convert bag to dataframes
+    dataframes = bag_to_dataframes(bagpath, topics)
+
+    # find global start and end times
+    start_times = list()
+    end_times = list()
+    for topic in topics:
+        df = dataframes[topic]
+        start_times.append(df["Time"].iloc[0])
+        end_times.append(df["Time"].iloc[-1])
+    start_time = max(start_times)
+    end_time = min(end_times)
+
+    # give all dataframes equal timesteps
+    synchronized_dataframes = []
+    for topic in topics:
+        df = recreate_sampling_times(
+            dataframes[topic], step_length, start_time, end_time
+        )
+        synchronized_dataframes.append(df)
+
+    # merge dataframes
+    df_merged = reduce(
+        lambda left, right: pd.merge(left, right, on=["Time"], how="outer"),
+        synchronized_dataframes,
+    )
+
+    return df_merged
 
 
 def plot_surge(bagpath: Path) -> None:
@@ -107,7 +171,7 @@ def plot_surge(bagpath: Path) -> None:
     ODOM = "/odometry/filtered"
     topics = [TAU, ODOM]
 
-    dataframes = bag_to_dataframe(bagpath, topics)
+    dataframes = bag_to_dataframes(bagpath, topics)
 
     sea.set_style("white")
     fig, axes = plt.subplots(3, 1, sharex=True)
@@ -122,7 +186,7 @@ def plot_sway(bagpath: Path) -> None:
     ODOM = "/odometry/filtered"
     topics = [TAU, ODOM]
 
-    dataframes = bag_to_dataframe(bagpath, topics)
+    dataframes = bag_to_dataframes(bagpath, topics)
 
     sea.set_style("white")
     fig, axes = plt.subplots(3, 1, sharex=True)
@@ -133,7 +197,7 @@ def plot_sway(bagpath: Path) -> None:
 
 
 def save_bag_as_df_feather(bagpath: Path, savedir: Path, topics: List[str]) -> None:
-    dataframes = bag_to_dataframe(str(bagpath), topics)
+    dataframes = bag_to_dataframes(str(bagpath), topics)
     savedir = savedir / bagpath.stem
     savedir.mkdir(parents=True, exist_ok=True)
     for topic, dataframe in dataframes.items():
@@ -149,8 +213,6 @@ def data_conversion(test_name: str) -> None:
     topics = [
         "/thrust/tau_delivered",
         "/odometry/filtered",
-        "/thrust/tau_delivered",
-        "/odometry/filtered",
         "/thrust/desired_forces",
         "/auv/battery_level/system",
         "/imu/data_raw",
@@ -162,6 +224,23 @@ def data_conversion(test_name: str) -> None:
     for element in bagdir.iterdir():
         if element.is_file() and element.suffix == ".bag":
             save_bag_as_df_feather(bagpath=element, savedir=savedir, topics=topics)
+
+
+def profile(func):
+    def wrapper(*args, **kwargs):
+        prof = cProfile.Profile()
+        retval = prof.runcall(func, *args, **kwargs)
+
+        s = io.StringIO()
+        ps = pstats.Stats(prof, stream=s).sort_stats(pstats.SortKey.TIME)
+        ps.print_stats()
+        datafn = func.__name__ + ".profile"  # Name the data file sensibly
+        with open(datafn, "w") as perf_file:
+            perf_file.write(s.getvalue())
+
+        return retval
+
+    return wrapper
 
 
 def main():
@@ -252,5 +331,55 @@ def main():
     data.to_pickle(SAVEDIR.joinpath("%s.pickle" % RUN_NAME))
 
 
+def single_conversion(bag_path: Path, save_dir: Path):
+    TOPICS = [
+        "/thrust/tau_delivered",
+        "/odometry/filtered",
+        "/auv/battery_level/system",
+        "/pwm",
+    ]
+    STEP_LENGTH = 0.1
+
+    df = bag_to_dataframe(bag_path, TOPICS, STEP_LENGTH)
+
+    df = df.rename(
+        columns={
+            "data": "voltage",
+            "pose.pose.position.x": "position_x",
+            "pose.pose.position.y": "position_y",
+            "pose.pose.position.z": "position_z",
+            "pose.pose.orientation.x": "orientation_x",
+            "pose.pose.orientation.y": "orientation_y",
+            "pose.pose.orientation.z": "orientation_z",
+            "pose.pose.orientation.w": "orientation_w",
+            "twist.twist.linear.x": "linear_x",
+            "twist.twist.linear.y": "linear_y",
+            "twist.twist.linear.z": "linear_z",
+            "twist.twist.angular.x": "angular_x",
+            "twist.twist.angular.y": "angular_y",
+            "twist.twist.angular.z": "angular_z",
+            "positive_width_us_1": "pwm_1",
+            "positive_width_us_2": "pwm_2",
+            "positive_width_us_3": "pwm_3",
+            "positive_width_us_4": "pwm_4",
+            "positive_width_us_5": "pwm_5",
+            "positive_width_us_6": "pwm_6",
+            "positive_width_us_7": "pwm_7",
+        }
+    )
+
+    save_path = (save_dir / bag_path.name).with_suffix(".csv")
+    df.to_csv(save_path)
+    
+
+def full_conversion(bag_dir, save_dir):
+    for element in bag_dir.iterdir():
+        if element.is_file() and element.suffix == ".bag":
+            single_conversion(bag_path=element, save_dir=save_dir)
+
+
 if __name__ == "__main__":
-    main()
+    BAG_DIR = Path("/home/michaelhoyer/system_identification/data/raw")
+    SAVE_DIR = Path("/home/michaelhoyer/system_identification/data/synchronized")
+
+    full_conversion(BAG_DIR, SAVE_DIR)
