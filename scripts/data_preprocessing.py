@@ -3,21 +3,20 @@ Script that prepares data for later usage
 
 """
 
+
 from functools import reduce
 from pathlib import Path
-from typing import List, Dict
-import cProfile
-import io
-import pstats
+from typing import Dict, List
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sea
 import bagpy
-
-from scipy.interpolate.interpolate import interp1d
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sea
 from pandas import DataFrame
+from scipy.interpolate.interpolate import interp1d
+
+from helper import Jq, R_ned_enu, get_eta, get_nu, get_tau, make_df, profile
 
 
 def double_line_plot(odometry: DataFrame, thrust: DataFrame, save_path: Path):
@@ -99,7 +98,7 @@ def recreate_sampling_times(
     data_new = pd.concat(new_columns, axis=1)
 
     if plot_col:
-        SAVEDIR = Path("plots/interpolation")
+        SAVEDIR = Path("results/interpolation")
         sea.set_style("white")
         plt.figure(figsize=(5, 2.5))
         sea.lineplot(x=shifted_timestamps.values, y=data[plot_col], label="original")
@@ -224,23 +223,6 @@ def data_conversion(test_name: str) -> None:
     for element in bagdir.iterdir():
         if element.is_file() and element.suffix == ".bag":
             save_bag_as_df_feather(bagpath=element, savedir=savedir, topics=topics)
-
-
-def profile(func):
-    def wrapper(*args, **kwargs):
-        prof = cProfile.Profile()
-        retval = prof.runcall(func, *args, **kwargs)
-
-        s = io.StringIO()
-        ps = pstats.Stats(prof, stream=s).sort_stats(pstats.SortKey.TIME)
-        ps.print_stats()
-        datafn = func.__name__ + ".profile"  # Name the data file sensibly
-        with open(datafn, "w") as perf_file:
-            perf_file.write(s.getvalue())
-
-        return retval
-
-    return wrapper
 
 
 def main():
@@ -370,7 +352,7 @@ def single_conversion(bag_path: Path, save_dir: Path):
 
     save_path = (save_dir / bag_path.name).with_suffix(".csv")
     df.to_csv(save_path)
-    
+
 
 def full_conversion(bag_dir, save_dir):
     for element in bag_dir.iterdir():
@@ -378,8 +360,41 @@ def full_conversion(bag_dir, save_dir):
             single_conversion(bag_path=element, save_dir=save_dir)
 
 
+@profile
+def single_integration_check(csv_path: Path, plot=False):
+    df = pd.read_csv(csv_path)
+    dt = df["Time"].iloc[1] - df["Time"].iloc[0]
+    nu = get_nu(df)
+    eta = get_eta(df)
+    eta_euler = np.zeros(eta.shape)
+
+    eta_euler[0] = eta[0]
+    for i in range(len(nu) - 1):
+        eta_euler[i + 1] = eta_euler[i] + Jq(eta[i]) @ nu[i] * dt
+
+    df_euler = make_df(df["Time"].to_numpy(), eta=eta_euler, nu=nu)
+    save_dir = Path("results/integration_checks")
+
+    df_euler.to_csv(save_dir / csv_path.name)
+
+    if plot:
+        pos_dofs = ["position_x", "position_y", "position_z"]
+        vel_dofs = ["linear_x", "linear_y", "linear_z"]
+        for pos_key, vel_key in zip(pos_dofs, vel_dofs):
+            fig, axes = plt.subplots(2, 1, sharex=True)
+
+            sea.lineplot(ax=axes[0], x="Time", y=pos_key, data=df, label="Measured")
+            sea.lineplot(ax=axes[0], x="Time", y=pos_key, data=df_euler, label="Euler")
+
+            sea.lineplot(ax=axes[1], x="Time", y=vel_key, data=df, label="Measured")
+
+            plt.savefig(save_dir.joinpath("%s-%s.png" % (csv_path.stem, pos_key)))
+
+
 if __name__ == "__main__":
     BAG_DIR = Path("/home/michaelhoyer/system_identification/data/raw")
     SAVE_DIR = Path("/home/michaelhoyer/system_identification/data/synchronized")
 
-    full_conversion(BAG_DIR, SAVE_DIR)
+    DF_DIR = Path("data/synchronized")
+
+    single_integration_check(DF_DIR / "sway-1.csv", plot=True)
