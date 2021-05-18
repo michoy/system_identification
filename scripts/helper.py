@@ -4,7 +4,6 @@ from pathlib import Path
 import pstats
 
 import numpy as np
-from numpy.lib.npyio import save
 import pandas as pd
 from scipy.spatial.transform import Rotation
 
@@ -84,10 +83,6 @@ def Jq(eta: np.ndarray) -> np.ndarray:
     )
 
     return J
-
-
-def R_ned_enu() -> Rotation:
-    pass
 
 
 def get_nu(df: pd.DataFrame) -> np.ndarray:

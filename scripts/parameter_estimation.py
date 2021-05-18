@@ -13,7 +13,7 @@ from scipy.optimize import minimize
 from scipy import linalg
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data_preprocessing import recreate_sampling_times
+from preprocessing import recreate_sampling_times
 from auv_models import auv_1DOF_simplified, auv_6DOF_simplified
 
 
