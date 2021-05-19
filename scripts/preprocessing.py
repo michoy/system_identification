@@ -21,29 +21,6 @@ from numba import jit, njit
 from helper import Jq, get_eta, get_nu, get_tau, make_df, profile
 
 
-def double_line_plot(odometry: DataFrame, thrust: DataFrame, save_path: Path):
-    sea.set()
-    fig, axes = plt.subplots(2, 1, sharex=True)
-
-    odometry = odometry.head(2000)
-    thrust = thrust.head(2000)
-
-    sea.lineplot(ax=axes[0], y=odometry["linear.x"], x=odometry["Time"])
-    sea.lineplot(ax=axes[1], y=thrust["force.x"], x=thrust["Time"])
-
-    plt.savefig(save_path)
-
-
-def check_for_missing_values(data: DataFrame) -> None:
-    if data.isnull().values.any():
-        print("The dataset has %d missing values" % data.isnull().sum().sum())
-        for col_name in data.columns:
-            print(
-                "Column %s has %d missing values"
-                % (col_name, data[col_name].isnull().sum())
-            )
-
-
 def recreate_sampling_times(
     data: DataFrame,
     step_length: float,
@@ -168,154 +145,6 @@ def bag_to_dataframe(
     )
 
     return df_merged
-
-
-def plot_surge(bagpath: Path) -> None:
-    TAU = "/thrust/tau_delivered"
-    ODOM = "/odometry/filtered"
-    topics = [TAU, ODOM]
-
-    dataframes = bag_to_dataframes(bagpath, topics)
-
-    sea.set_style("white")
-    fig, axes = plt.subplots(3, 1, sharex=True)
-    sea.lineplot(ax=axes[0], x="Time", y="pose.pose.position.x", data=dataframes[ODOM])
-    sea.lineplot(ax=axes[1], x="Time", y="twist.twist.linear.x", data=dataframes[ODOM])
-    sea.lineplot(ax=axes[2], x="Time", y="force.x", data=dataframes[TAU])
-    plt.savefig("results/surge-2021-04-27-04-08-38.png")
-
-
-def plot_sway(bagpath: Path) -> None:
-    TAU = "/thrust/tau_delivered"
-    ODOM = "/odometry/filtered"
-    topics = [TAU, ODOM]
-
-    dataframes = bag_to_dataframes(bagpath, topics)
-
-    sea.set_style("white")
-    fig, axes = plt.subplots(3, 1, sharex=True)
-    sea.lineplot(ax=axes[0], x="Time", y="pose.pose.position.y", data=dataframes[ODOM])
-    sea.lineplot(ax=axes[1], x="Time", y="twist.twist.linear.y", data=dataframes[ODOM])
-    sea.lineplot(ax=axes[2], x="Time", y="force.y", data=dataframes[TAU])
-    plt.savefig("results/sway-2021-04-27-04-51-27.png")
-
-
-def save_bag_as_df_feather(bagpath: Path, savedir: Path, topics: List[str]) -> None:
-    dataframes = bag_to_dataframes(str(bagpath), topics)
-    savedir = savedir / bagpath.stem
-    savedir.mkdir(parents=True, exist_ok=True)
-    for topic, dataframe in dataframes.items():
-        topic_better_name = topic.replace("/", "-")[1:]
-        savepath = savedir / topic_better_name
-        dataframe.to_feather(savepath)
-
-
-def data_conversion(test_name: str) -> None:
-    bagdir = Path.home() / Path("data") / test_name
-    savedir = Path.home() / Path("system_identification/data/raw") / test_name
-
-    topics = [
-        "/thrust/tau_delivered",
-        "/odometry/filtered",
-        "/thrust/desired_forces",
-        "/auv/battery_level/system",
-        "/imu/data_raw",
-        "/dvl/dvl_msg",
-        "/qualisys/Body_1/odom",
-        "/pwm",
-    ]
-
-    for element in bagdir.iterdir():
-        if element.is_file() and element.suffix == ".bag":
-            save_bag_as_df_feather(bagpath=element, savedir=savedir, topics=topics)
-
-
-def main():
-
-    """Define paths for loading and saving dataframes"""
-
-    RUN_NAME = "1D-run-1"
-    ODOM_PATH = Path("data/%s/manta-pose_gt.csv" % RUN_NAME)
-    THRUST_PATH = Path("data/%s/manta-thruster_manager-input.csv" % RUN_NAME)
-    SAVEDIR = Path("data/processed")
-    DEBUG_PLOT_DIR = Path("plots/debug")
-
-    """ Load Dataframes """
-
-    odometry = pd.read_csv(ODOM_PATH)
-    thrust = pd.read_csv(THRUST_PATH)
-
-    """ Check for missing values """
-
-    check_for_missing_values(odometry)
-    check_for_missing_values(thrust)
-
-    """ Clean up dataframes """
-
-    drop_columns = [
-        "header.seq",
-        "header.stamp.secs",
-        "header.stamp.nsecs",
-        "header.frame_id",
-        "child_frame_id",
-        "pose.covariance",
-        "twist.covariance",
-    ]
-    odometry = odometry.drop(
-        columns=drop_columns, axis="columns"
-    ).rename(  # covariance is dropped because of interpolation difficulties
-        columns={
-            "pose.pose.position.x": "position.x",
-            "pose.pose.position.y": "position.y",
-            "pose.pose.position.z": "position.z",
-            "pose.pose.orientation.x": "orientation.x",
-            "pose.pose.orientation.y": "orientation.y",
-            "pose.pose.orientation.z": "orientation.z",
-            "pose.pose.orientation.w": "orientation.w",
-            "twist.twist.linear.x": "linear.x",
-            "twist.twist.linear.y": "linear.y",
-            "twist.twist.linear.z": "linear.z",
-            "twist.twist.angular.x": "angular.x",
-            "twist.twist.angular.y": "angular.y",
-            "twist.twist.angular.z": "angular.z",
-        }
-    )
-
-    """ Synchronize sampling times """
-
-    odom_init_time: float = odometry["Time"].iloc[0]
-    odom_end_time: float = odometry["Time"].iloc[-1]
-    thrust_init_time: float = thrust["Time"].iloc[0]
-    thrust_end_time: float = thrust["Time"].iloc[-1]
-
-    # define time boundry
-    init_time = max(odom_init_time, thrust_init_time)
-    end_time = min(odom_end_time, thrust_end_time)
-
-    # only keep rows inside time boundry
-    odometry = odometry[odometry["Time"] > init_time]
-    odometry = odometry[odometry["Time"] < end_time]
-    thrust = thrust[thrust["Time"] > init_time]
-    thrust = thrust[thrust["Time"] < end_time]
-
-    # create synchronized datasets through interpolation
-    thrust = recreate_sampling_times(
-        thrust, step_length=0.1, duration=end_time - init_time
-    )
-    odometry = recreate_sampling_times(
-        odometry, step_length=0.1, duration=end_time - init_time, plot_col="linear.x"
-    )
-
-    """ Merge dataframes """
-
-    data = odometry.merge(
-        thrust, how="inner", left_on="Time", right_on="Time"
-    ).set_index("Time")
-
-    """ Save processed data """
-
-    data.to_csv(SAVEDIR.joinpath("%s.csv" % RUN_NAME))
-    data.to_pickle(SAVEDIR.joinpath("%s.pickle" % RUN_NAME))
 
 
 def transform_to_NED(df: DataFrame) -> DataFrame:
@@ -444,7 +273,7 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
             "orientation_y",
             "orientation_z",
         ]
-        
+
         for pos_key, vel_key in zip(pos_dofs, vel_dofs):
             fig, axes = plt.subplots(2, 1, sharex=True)
 
@@ -455,16 +284,15 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
 
             plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, pos_key)))
             plt.close(fig)
-        
+
         for dof in orientation_dofs:
             fig, axes = plt.subplots()
-            
+
             sea.lineplot(x="Time", y=dof, data=df, label="Measured")
             sea.lineplot(x="Time", y=dof, data=df_euler, label="Euler")
 
             plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
             plt.close(fig)
-            
 
 
 def full_integration_check(df_dir: Path, plot=True):
