@@ -335,7 +335,6 @@ def transform_to_NED(df: DataFrame) -> DataFrame:
     quat_cols = ["orientation_w", "orientation_x", "orientation_y", "orientation_z"]
     quats: np.ndarray = df[quat_cols].to_numpy()
 
-    
     def rotate_quat(row):
         w = row.orientation_w
         x = row.orientation_x
@@ -423,14 +422,29 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
         eta_euler[i + 1] = eta_euler[i] + Jq(eta[i]) @ nu[i] * dt
 
     df_euler = make_df(df["Time"].to_numpy(), eta=eta_euler, nu=nu)
-    
+    save_dir = Path("results/integration_checks")
+
     if save:
-        save_dir = Path("results/integration_checks")
         df_euler.to_csv(save_dir / csv_path.name)
 
     if plot:
-        pos_dofs = ["position_x", "position_y", "position_z"]
-        vel_dofs = ["linear_x", "linear_y", "linear_z"]
+        pos_dofs = [
+            "position_x",
+            "position_y",
+            "position_z",
+        ]
+        vel_dofs = [
+            "linear_x",
+            "linear_y",
+            "linear_z",
+        ]
+        orientation_dofs = [
+            "orientation_w",
+            "orientation_x",
+            "orientation_y",
+            "orientation_z",
+        ]
+        
         for pos_key, vel_key in zip(pos_dofs, vel_dofs):
             fig, axes = plt.subplots(2, 1, sharex=True)
 
@@ -440,7 +454,19 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
             sea.lineplot(ax=axes[1], x="Time", y=vel_key, data=df, label="Measured")
 
             plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, pos_key)))
+            plt.close(fig)
+        
+        for dof in orientation_dofs:
+            fig, axes = plt.subplots()
             
+            sea.lineplot(x="Time", y=dof, data=df, label="Measured")
+            sea.lineplot(x="Time", y=dof, data=df_euler, label="Euler")
+
+            plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
+            plt.close(fig)
+            
+
+
 def full_integration_check(df_dir: Path, plot=True):
     for element in df_dir.iterdir():
         if element.is_file() and element.suffix == ".csv":
@@ -451,7 +477,6 @@ if __name__ == "__main__":
     BAG_DIR = Path("/home/michaelhoyer/system_identification/data/raw")
     SAVE_DIR = Path("/home/michaelhoyer/system_identification/data/synchronized")
 
-    DF_DIR = Path("data/synchronized")
+    DF_DIR = Path("data/preprocessed")
 
-    full_conversion(BAG_DIR, SAVE_DIR)
     full_integration_check(DF_DIR)
