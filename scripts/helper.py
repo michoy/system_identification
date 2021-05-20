@@ -1,4 +1,5 @@
 import cProfile
+from enum import Enum
 import io
 from pathlib import Path
 import pstats
@@ -7,24 +8,69 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation
 
-ETA_DOFS = [
-    "position_x",
-    "position_y",
-    "position_z",
-    "orientation_w",
-    "orientation_x",
-    "orientation_y",
-    "orientation_z",
+
+class DFKeys(Enum):
+    TIME = "Time"
+    POSITION_X = "position_x"
+    POSITION_Y = "position_y"
+    POSITION_Z = "position_Z"
+    ORIENTATION_W = "orientation_w"
+    ORIENTATION_X = "orientation_x"
+    ORIENTATION_Y = "orientation_y"
+    ORIENTATION_Z = "orientation_z"
+    ROLL = "roll"
+    PITCH = "pitch"
+    YAW = "yaw"
+    SURGE = "surge"
+    SWAY = "sway"
+    HEAVE = "heave"
+    ROLL_VEL = "roll_vel"
+    PITCH_VEL = "pitch_vel"
+    YAW_VEL = "yaw_vel"
+    FORCE_X = "force_x"
+    FORCE_Y = "force_y"
+    FORCE_Z = "force_z"
+    TORQUE_X = "torque_x"
+    TORQUE_Y = "torque_y"
+    TORQUE_Z = "torque_z"
+
+
+ORIENTATIONS_QUAT = [
+    DFKeys.ORIENTATION_W.value,
+    DFKeys.ORIENTATION_X.value,
+    DFKeys.ORIENTATION_Y.value,
+    DFKeys.ORIENTATION_Z.value,
 ]
-NU_DOFS = [
-    "linear_x",
-    "linear_y",
-    "linear_z",
-    "angular_x",
-    "angular_y",
-    "angular_z",
+ORIENTATIONS_EULER = [
+    DFKeys.ROLL.value,
+    DFKeys.PITCH.value,
+    DFKeys.YAW.value,
 ]
-TAU_DOFS = ["force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z"]
+POSITIONS = [
+    DFKeys.POSITION_X.value,
+    DFKeys.POSITION_Y.value,
+    DFKeys.POSITION_Z.value,
+]
+LINEAR_VELOCITIES = [
+    DFKeys.SURGE.value,
+    DFKeys.SWAY.value,
+    DFKeys.HEAVE.value,
+]
+ANGULAR_VELOCITIES = [
+    DFKeys.ROLL_VEL.value,
+    DFKeys.PITCH_VEL.value,
+    DFKeys.YAW_VEL.value,
+]
+TAU_DOFS = [
+    DFKeys.FORCE_X.value,
+    DFKeys.FORCE_Y.value,
+    DFKeys.FORCE_Z.value,
+    DFKeys.TORQUE_X.value,
+    DFKeys.TORQUE_Y.value,
+    DFKeys.TORQUE_Z.value,
+]
+ETA_DOFS = POSITIONS + ORIENTATIONS_QUAT
+NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
 
 def rotation(quat: np.ndarray) -> Rotation:
@@ -111,7 +157,7 @@ def make_df(
     nu: np.ndarray = None,
     tau: np.ndarray = None,
 ) -> pd.DataFrame:
-    data = {"Time": time}
+    data = {DFKeys.TIME.value: time}
     if type(eta) is np.ndarray:
         for dof, values in zip(ETA_DOFS, eta.T):
             data[dof] = values
@@ -129,7 +175,7 @@ def profile(func):
         prof = cProfile.Profile()
         retval = prof.runcall(func, *args, **kwargs)
 
-        save_file = Path("profiling") / (func.__name__ + ".profile") 
+        save_file = Path("profiling") / (func.__name__ + ".profile")
         Path.mkdir(save_file.parent, parents=True, exist_ok=True)
         s = io.StringIO()
         ps = pstats.Stats(prof, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
