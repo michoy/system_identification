@@ -5,6 +5,7 @@ Script that prepares data for later usage
 
 
 from functools import reduce
+from operator import add
 from pathlib import Path
 from typing import Dict, List
 from enum import Enum
@@ -17,9 +18,11 @@ import pandas as pd
 import seaborn as sea
 from pandas import DataFrame
 from scipy.interpolate.interpolate import interp1d
+from sklearn import preprocessing
 from numba import jit, njit
 
 from helper import (
+    ETA_EULER_DOFS,
     Jq,
     get_eta,
     get_nu,
@@ -255,23 +258,24 @@ def single_conversion(bag_path: Path, save_dir: Path, plot_col=None):
     df.to_csv(save_path)
 
 
-def add_euler_angles(df: pd.DataFrame) -> pd.DataFrame:
+def add_euler_angles(df: pd.DataFrame, append_str="") -> pd.DataFrame:
     def map_to_euler(row):
         angles = Quaternion(
-            w=row[DFKeys.ORIENTATION_W.value],
-            x=row[DFKeys.ORIENTATION_X.value],
-            y=row[DFKeys.ORIENTATION_Y.value],
-            z=row[DFKeys.ORIENTATION_Z.value],
+            w=row[DFKeys.ORIENTATION_W.value + append_str],
+            x=row[DFKeys.ORIENTATION_X.value + append_str],
+            y=row[DFKeys.ORIENTATION_Y.value + append_str],
+            z=row[DFKeys.ORIENTATION_Z.value + append_str],
         ).yaw_pitch_roll
         return pd.Series(
             {
-                DFKeys.YAW.value: angles[0],
-                DFKeys.PITCH.value: angles[1],
-                DFKeys.ROLL.value: angles[2],
+                DFKeys.YAW.value + append_str: angles[0],
+                DFKeys.PITCH.value + append_str: angles[1],
+                DFKeys.ROLL.value + append_str: angles[2],
             }
         )
 
-    df[ORIENTATIONS_EULER] = df[ORIENTATIONS_QUAT].apply(
+    dofs = [dof + append_str for dof in ORIENTATIONS_EULER]
+    df[dofs] = df.apply(
         map_to_euler,
         axis=1,
     )
@@ -295,6 +299,11 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
     eta_integrated[0] = eta[0]
     for i in range(len(nu) - 1):
         eta_integrated[i + 1] = eta_integrated[i] + Jq(eta[i]) @ nu[i] * dt
+        # eta_integrated[i + 1][3:7] = preprocessing.normalize(
+        #     [eta_integrated[i + 1][3:7]]
+        # )  # fossen2021 alg 2.1
+        q = Quaternion(eta_integrated[i + 1][3:7]).normalised
+        eta_integrated[i + 1][3:7] = q.elements
     for dof, values in zip(ETA_DOFS, eta_integrated.T):
         df[dof + "_integrated"] = values
 
@@ -302,43 +311,44 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
 
     # add euler angles
     df = add_euler_angles(df)
-    df_integrated = add_euler_angles(df_integrated)
+    df = add_euler_angles(df, append_str="_integrated")
+
+    # add difference
+    for dof in ETA_DOFS:
+        df[dof + "_difference_integrated"] = df.apply(
+            lambda row: row[dof + "_integrated"] - row[dof], axis=1
+        )
 
     save_dir = Path("results/integration_checks")
 
     if save:
-        df_integrated.to_csv(save_dir / csv_path.name)
+        df.to_csv(save_dir / csv_path.name)
 
     if plot:
 
-        for pos_key, vel_key in zip(POSITIONS, LINEAR_VELOCITIES):
+        for dof in ETA_DOFS:
             fig, axes = plt.subplots(2, 1, sharex=True)
 
             sea.lineplot(
-                ax=axes[0], x=DFKeys.TIME.value, y=pos_key, data=df, label="Measured"
+                ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured"
             )
             sea.lineplot(
                 ax=axes[0],
                 x=DFKeys.TIME.value,
-                y=pos_key,
-                data=df_integrated,
+                y=dof + "_integrated",
+                data=df,
                 label="Integrated",
             )
-
             sea.lineplot(
-                ax=axes[1], x=DFKeys.TIME.value, y=vel_key, data=df, label="Measured"
+                ax=axes[1],
+                x=DFKeys.TIME.value,
+                y=dof + "_difference_integrated",
+                data=df,
+                label="Integrated - Measured",
             )
 
-            plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, pos_key)))
-            plt.close(fig)
-
-        for dof in ORIENTATIONS_EULER:
-            fig, axes = plt.subplots(2, 1, sharex=True)
-
-            sea.lineplot(x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
-            sea.lineplot(
-                x=DFKeys.TIME.value, y=dof, data=df_integrated, label="Integrated"
-            )
+            axes[0].set_ylabel(dof)
+            axes[1].set_ylabel("Difference")
 
             plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
             plt.close(fig)
@@ -356,5 +366,6 @@ if __name__ == "__main__":
 
     DF_DIR = Path("data/preprocessed")
 
-    full_integration_check(DF_DIR)
+    # full_integration_check(DF_DIR)
     # full_conversion(BAG_DIR, SAVE_DIR)
+    single_integration_check(DF_DIR / "yaw-1.csv", plot=True)
