@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pyquaternion import Quaternion
 import pandas as pd
+from scipy.spatial.transform.rotation import Rotation
 import seaborn as sea
 from pandas import DataFrame
 from scipy.interpolate.interpolate import interp1d
@@ -24,6 +25,7 @@ from numba import jit, njit
 from helper import (
     ETA_EULER_DOFS,
     Jq,
+    NU_DOFS,
     get_eta,
     get_nu,
     get_tau,
@@ -36,6 +38,7 @@ from helper import (
     LINEAR_VELOCITIES,
     ANGULAR_VELOCITIES,
     ETA_DOFS,
+    rotation,
 )
 
 
@@ -268,9 +271,9 @@ def add_euler_angles(df: pd.DataFrame, append_str="") -> pd.DataFrame:
         ).yaw_pitch_roll
         return pd.Series(
             {
-                DFKeys.YAW.value + append_str: angles[0],
-                DFKeys.PITCH.value + append_str: angles[1],
                 DFKeys.ROLL.value + append_str: angles[2],
+                DFKeys.PITCH.value + append_str: angles[1],
+                DFKeys.YAW.value + append_str: angles[0],
             }
         )
 
@@ -293,21 +296,35 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
     dt = df[DFKeys.TIME.value].iloc[1] - df[DFKeys.TIME.value].iloc[0]
     nu = get_nu(df)
     eta = get_eta(df)
-    eta_integrated = np.zeros(eta.shape)
 
     # add integration
+    # see fossen2021 alg 2.1
+    eta_integrated = np.zeros(eta.shape)
     eta_integrated[0] = eta[0]
     for i in range(len(nu) - 1):
         eta_integrated[i + 1] = eta_integrated[i] + Jq(eta[i]) @ nu[i] * dt
-        # eta_integrated[i + 1][3:7] = preprocessing.normalize(
-        #     [eta_integrated[i + 1][3:7]]
-        # )  # fossen2021 alg 2.1
         q = Quaternion(eta_integrated[i + 1][3:7]).normalised
         eta_integrated[i + 1][3:7] = q.elements
     for dof, values in zip(ETA_DOFS, eta_integrated.T):
         df[dof + "_integrated"] = values
 
     # add derivation
+    position = eta.T[0:3].T
+    orientation = eta.T[3:7].T
+    nu_derivated = np.zeros(nu.shape)
+    for i in range(len(nu) - 1):
+        q_current = Quaternion(orientation[i])
+        q_derivative = Quaternion((orientation[i + 1] - orientation[i]) / dt).normalised
+
+        angular_velocity = 2 * q_current.conjugate * q_derivative
+
+        R_inv = rotation(q_current.elements).inv().as_matrix()
+        linear_velocity = R_inv @ (position[i + 1] - position[i]) / dt
+
+        nu_derivated[i] = np.concatenate((linear_velocity, angular_velocity))
+
+    for dof, values in zip(NU_DOFS, nu_derivated.T):
+        df[dof + "_derivated"] = values
 
     # add euler angles
     df = add_euler_angles(df)
@@ -315,8 +332,12 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
 
     # add difference
     for dof in ETA_DOFS:
-        df[dof + "_difference_integrated"] = df.apply(
+        df[dof + "_difference"] = df.apply(
             lambda row: row[dof + "_integrated"] - row[dof], axis=1
+        )
+    for dof in NU_DOFS:
+        df[dof + "_difference"] = df.apply(
+            lambda row: row[dof + "_derivated"] - row[dof], axis=1
         )
 
     save_dir = Path("results/integration_checks")
@@ -342,9 +363,36 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
             sea.lineplot(
                 ax=axes[1],
                 x=DFKeys.TIME.value,
-                y=dof + "_difference_integrated",
+                y=dof + "_difference",
                 data=df,
                 label="Integrated - Measured",
+            )
+
+            axes[0].set_ylabel(dof)
+            axes[1].set_ylabel("Difference")
+
+            plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
+            plt.close(fig)
+
+        for dof in NU_DOFS:
+            fig, axes = plt.subplots(2, 1, sharex=True)
+
+            sea.lineplot(
+                ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured"
+            )
+            sea.lineplot(
+                ax=axes[0],
+                x=DFKeys.TIME.value,
+                y=dof + "_derivated",
+                data=df,
+                label="Derivated",
+            )
+            sea.lineplot(
+                ax=axes[1],
+                x=DFKeys.TIME.value,
+                y=dof + "_difference",
+                data=df,
+                label="Derivated - Measured",
             )
 
             axes[0].set_ylabel(dof)
