@@ -5,6 +5,7 @@ Script that prepares data for later usage
 
 
 from functools import reduce
+from logging import FATAL
 from operator import add
 from pathlib import Path
 from typing import Dict, List
@@ -13,6 +14,8 @@ from enum import Enum
 import bagpy
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy import pi as PI
+from numpy.lib.function_base import angle
 from pyquaternion import Quaternion
 import pandas as pd
 from scipy.spatial.transform.rotation import Rotation
@@ -108,7 +111,7 @@ def recreate_sampling_times(
             x=DFKeys.TIME.value, y=plot_col, data=data_new, label="interpolated"
         )
         # plt.ylabel("Velocity")
-        # plt.savefig(SAVEDIR.joinpath("%s.eps" % plot_col))
+        # plt.savefig(SAVEDIR.joinpath("%s.pdf" % plot_col))
         plt.show()
 
     return data_new
@@ -213,6 +216,35 @@ def transform_to_NED(df: DataFrame) -> DataFrame:
     return df
 
 
+def remove_orientation_flip(df: DataFrame, print_flips=False) -> DataFrame:
+    def new_flip(row: pd.Series, prev_row: pd.Series) -> bool:
+        for i in range(len(row)):
+            if abs(row[i] - prev_row[i]) > 1:
+                return True
+        return False
+
+    new_orientations = np.zeros(df[ORIENTATIONS_QUAT].shape)
+    prev_row = df[ORIENTATIONS_QUAT].loc[0]
+    flipped = False
+    num_flips = 0
+    for item in df[ORIENTATIONS_QUAT].iterrows():
+        i = item[0]
+        row = item[1]
+        if new_flip(row, prev_row):
+            flipped = not flipped
+            num_flips += 1
+        if flipped:
+            new_orientations[i] = -row.values
+        else:
+            new_orientations[i] = row.values
+        prev_row = row
+
+    df[ORIENTATIONS_QUAT] = pd.DataFrame(new_orientations)
+    if print_flips:
+        print("Number of flips: %i" % num_flips)
+    return df
+
+
 def single_conversion(bag_path: Path, save_dir: Path, plot_col=None):
     TOPICS = [
         "/thrust/tau_delivered",
@@ -258,32 +290,46 @@ def single_conversion(bag_path: Path, save_dir: Path, plot_col=None):
     )
 
     df = transform_to_NED(df)
+    df = remove_orientation_flip(df)
+    df = add_euler_angles(df)
 
     save_path = (save_dir / bag_path.name).with_suffix(".csv")
     df.to_csv(save_path)
 
 
 def add_euler_angles(df: pd.DataFrame, append_str="") -> pd.DataFrame:
-    def map_to_euler(row):
-        angles = Quaternion(
+    angles = np.zeros((len(df), 3))
+    flips = np.array([0, 0, 0])
+
+    for item in df[[dof + append_str for dof in ORIENTATIONS_QUAT]].iterrows():
+        i: int = item[0]
+        row = item[1]
+
+        # convert from quats
+        angles[i] = Quaternion(
             w=row[DFKeys.ORIENTATION_W.value + append_str],
             x=row[DFKeys.ORIENTATION_X.value + append_str],
             y=row[DFKeys.ORIENTATION_Y.value + append_str],
             z=row[DFKeys.ORIENTATION_Z.value + append_str],
         ).yaw_pitch_roll
-        return pd.Series(
-            {
-                DFKeys.ROLL.value + append_str: angles[2],
-                DFKeys.PITCH.value + append_str: angles[1],
-                DFKeys.YAW.value + append_str: angles[0],
-            }
-        )
 
-    dofs = [dof + append_str for dof in ORIENTATIONS_EULER]
-    df[dofs] = df.apply(
-        map_to_euler,
-        axis=1,
+        # add flip compensation
+        if i > 0:
+            for j in range(3):
+                if angles[i][j] + flips[j] * 2 * PI - angles[i - 1][j] > PI:
+                    flips[j] -= 1
+                elif angles[i][j] + flips[j] * 2 * PI - angles[i - 1][j] < -PI:
+                    flips[j] += 1
+            angles[i] += flips * 2 * PI
+
+    df[[dof + append_str for dof in ORIENTATIONS_EULER]] = pd.Series(
+        {
+            DFKeys.ROLL.value + append_str: angles.T[2],
+            DFKeys.PITCH.value + append_str: angles.T[1],
+            DFKeys.YAW.value + append_str: angles.T[0],
+        }
     )
+
     return df
 
 
@@ -329,11 +375,10 @@ def single_integration_check(csv_path: Path):
         df[dof + "_derivated"] = values
 
     # add euler angles
-    df = add_euler_angles(df)
     df = add_euler_angles(df, append_str="_integrated")
 
     # add difference
-    for dof in ETA_DOFS:
+    for dof in ETA_DOFS + ORIENTATIONS_EULER:
         df[dof + "_difference"] = df.apply(
             lambda row: row[dof + "_integrated"] - row[dof], axis=1
         )
@@ -350,7 +395,7 @@ def integration_check_plot(csv_path: Path):
 
     df = pd.read_csv(csv_path)
 
-    for dof in ETA_DOFS:
+    for dof in ETA_DOFS + ORIENTATIONS_EULER:
         fig, axes = plt.subplots(2, 1, sharex=True)
 
         sea.lineplot(ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
@@ -372,7 +417,7 @@ def integration_check_plot(csv_path: Path):
         axes[0].set_ylabel(dof)
         axes[1].set_ylabel("Difference")
 
-        plt.savefig(csv_path.parent / ("%s-%s.eps" % (csv_path.stem, dof)))
+        plt.savefig(csv_path.parent / ("%s-%s.%s" % (csv_path.stem, dof, PLOT_TYPE)))
         plt.close(fig)
 
     for dof in NU_DOFS:
@@ -397,7 +442,7 @@ def integration_check_plot(csv_path: Path):
         axes[0].set_ylabel(dof)
         axes[1].set_ylabel("Difference")
 
-        plt.savefig(csv_path.parent / ("%s-%s.eps" % (csv_path.stem, dof)))
+        plt.savefig(csv_path.parent / ("%s-%s.%s" % (csv_path.stem, dof, PLOT_TYPE)))
         plt.close(fig)
 
 
@@ -408,12 +453,18 @@ def full_integration_check(df_dir: Path):
 
 
 if __name__ == "__main__":
+    PLOT_TYPE = "jpg"
+
     BAG_DIR = Path("data/raw")
     SAVE_DIR = Path("data/preprocessed")
 
     DF_DIR = Path("data/preprocessed")
+    IC_DIR = Path("results/integration_checks")
 
-    # full_integration_check(DF_DIR)
-    # full_conversion(BAG_DIR, SAVE_DIR)
-    # single_conversion(BAG_DIR / "yaw-1.bag", SAVE_DIR)
-    single_integration_check(DF_DIR / "yaw-1.csv")
+    full_conversion(BAG_DIR, SAVE_DIR)
+    full_integration_check(DF_DIR)
+    # single_conversion(BAG_DIR / "surge-1.bag", SAVE_DIR)
+
+    # df = pd.read_csv(DF_DIR / "yaw-1.csv")
+    # df = remove_orientation_flip(df)
+    # df.to_csv(DF_DIR / "yaw-1.csv")
