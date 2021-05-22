@@ -183,6 +183,8 @@ def transform_to_NED(df: DataFrame) -> DataFrame:
         DFKeys.POSITION_Z.value,
         DFKeys.SWAY.value,
         DFKeys.HEAVE.value,
+        DFKeys.YAW_VEL.value,
+        DFKeys.ROLL_VEL.value,
     ]
     df[invert_columns] = df[invert_columns].apply(lambda x: x * (-1))
 
@@ -291,7 +293,7 @@ def full_conversion(bag_dir, save_dir):
             single_conversion(bag_path=element, save_dir=save_dir)
 
 
-def single_integration_check(csv_path: Path, plot=False, save=False):
+def single_integration_check(csv_path: Path):
     df = pd.read_csv(csv_path)
     dt = df[DFKeys.TIME.value].iloc[1] - df[DFKeys.TIME.value].iloc[0]
     nu = get_nu(df)
@@ -314,9 +316,9 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
     nu_derivated = np.zeros(nu.shape)
     for i in range(len(nu) - 1):
         q_current = Quaternion(orientation[i])
-        q_derivative = Quaternion((orientation[i + 1] - orientation[i]) / dt).normalised
+        q_derivative = Quaternion((orientation[i + 1] - orientation[i]) / dt)
 
-        angular_velocity = 2 * q_current.conjugate * q_derivative
+        angular_velocity = (2 * q_derivative * q_current.conjugate).elements[1:]
 
         R_inv = rotation(q_current.elements).inv().as_matrix()
         linear_velocity = R_inv @ (position[i + 1] - position[i]) / dt
@@ -341,71 +343,68 @@ def single_integration_check(csv_path: Path, plot=False, save=False):
         )
 
     save_dir = Path("results/integration_checks")
-
-    if save:
-        df.to_csv(save_dir / csv_path.name)
-
-    if plot:
-
-        for dof in ETA_DOFS:
-            fig, axes = plt.subplots(2, 1, sharex=True)
-
-            sea.lineplot(
-                ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured"
-            )
-            sea.lineplot(
-                ax=axes[0],
-                x=DFKeys.TIME.value,
-                y=dof + "_integrated",
-                data=df,
-                label="Integrated",
-            )
-            sea.lineplot(
-                ax=axes[1],
-                x=DFKeys.TIME.value,
-                y=dof + "_difference",
-                data=df,
-                label="Integrated - Measured",
-            )
-
-            axes[0].set_ylabel(dof)
-            axes[1].set_ylabel("Difference")
-
-            plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
-            plt.close(fig)
-
-        for dof in NU_DOFS:
-            fig, axes = plt.subplots(2, 1, sharex=True)
-
-            sea.lineplot(
-                ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured"
-            )
-            sea.lineplot(
-                ax=axes[0],
-                x=DFKeys.TIME.value,
-                y=dof + "_derivated",
-                data=df,
-                label="Derivated",
-            )
-            sea.lineplot(
-                ax=axes[1],
-                x=DFKeys.TIME.value,
-                y=dof + "_difference",
-                data=df,
-                label="Derivated - Measured",
-            )
-
-            axes[0].set_ylabel(dof)
-            axes[1].set_ylabel("Difference")
-
-            plt.savefig(save_dir.joinpath("%s-%s.eps" % (csv_path.stem, dof)))
-            plt.close(fig)
+    df.to_csv(save_dir / csv_path.name)
 
 
-def full_integration_check(df_dir: Path, plot=True):
+def integration_check_plot(csv_path: Path):
+
+    df = pd.read_csv(csv_path)
+
+    for dof in ETA_DOFS:
+        fig, axes = plt.subplots(2, 1, sharex=True)
+
+        sea.lineplot(ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
+        sea.lineplot(
+            ax=axes[0],
+            x=DFKeys.TIME.value,
+            y=dof + "_integrated",
+            data=df,
+            label="Integrated",
+        )
+        sea.lineplot(
+            ax=axes[1],
+            x=DFKeys.TIME.value,
+            y=dof + "_difference",
+            data=df,
+            label="Integrated - Measured",
+        )
+
+        axes[0].set_ylabel(dof)
+        axes[1].set_ylabel("Difference")
+
+        plt.savefig(csv_path.parent / ("%s-%s.eps" % (csv_path.stem, dof)))
+        plt.close(fig)
+
+    for dof in NU_DOFS:
+        fig, axes = plt.subplots(2, 1, sharex=True)
+
+        sea.lineplot(ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
+        sea.lineplot(
+            ax=axes[0],
+            x=DFKeys.TIME.value,
+            y=dof + "_derivated",
+            data=df,
+            label="Derivated",
+        )
+        sea.lineplot(
+            ax=axes[1],
+            x=DFKeys.TIME.value,
+            y=dof + "_difference",
+            data=df,
+            label="Derivated - Measured",
+        )
+
+        axes[0].set_ylabel(dof)
+        axes[1].set_ylabel("Difference")
+
+        plt.savefig(csv_path.parent / ("%s-%s.eps" % (csv_path.stem, dof)))
+        plt.close(fig)
+
+
+def full_integration_check(df_dir: Path):
     for element in df_dir.iterdir():
         if element.is_file() and element.suffix == ".csv":
-            single_integration_check(csv_path=element, plot=plot)
+            single_integration_check(csv_path=element)
 
 
 if __name__ == "__main__":
@@ -416,4 +415,5 @@ if __name__ == "__main__":
 
     # full_integration_check(DF_DIR)
     # full_conversion(BAG_DIR, SAVE_DIR)
-    single_integration_check(DF_DIR / "yaw-1.csv", plot=True)
+    # single_conversion(BAG_DIR / "yaw-1.bag", SAVE_DIR)
+    single_integration_check(DF_DIR / "yaw-1.csv")
