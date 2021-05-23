@@ -452,6 +452,12 @@ def full_integration_check(df_dir: Path):
             single_integration_check(csv_path=element)
 
 
+def full_integration_check_plot(checks_dir: Path):
+    for element in checks_dir.iterdir():
+        if element.is_file() and element.suffix == ".csv":
+            integration_check_plot(element)
+
+
 if __name__ == "__main__":
     PLOT_TYPE = "jpg"
 
@@ -461,8 +467,10 @@ if __name__ == "__main__":
     DF_DIR = Path("data/preprocessed")
     IC_DIR = Path("results/integration_checks")
 
-    full_conversion(BAG_DIR, SAVE_DIR)
-    full_integration_check(DF_DIR)
+    # full_conversion(BAG_DIR, SAVE_DIR)
+    # full_integration_check(DF_DIR)
+    full_integration_check_plot(IC_DIR)
+
     # single_conversion(BAG_DIR / "surge-1.bag", SAVE_DIR)
 
     # df = pd.read_csv(DF_DIR / "yaw-1.csv")
