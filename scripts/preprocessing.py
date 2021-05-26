@@ -6,9 +6,9 @@ Script that prepares data for later usage
 
 from functools import reduce
 from logging import FATAL
-from operator import add
+from operator import add, index
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List
 from enum import Enum
 
 import bagpy
@@ -29,6 +29,7 @@ from helper import (
     ETA_EULER_DOFS,
     Jq,
     NU_DOFS,
+    TAU_DOFS,
     get_eta,
     get_nu,
     get_tau,
@@ -245,7 +246,7 @@ def remove_orientation_flip(df: DataFrame, print_flips=False) -> DataFrame:
     return df
 
 
-def single_conversion(bag_path: Path, save_dir: Path, plot_col=None):
+def single_conversion(bag_path: Path, plot_col=None):
     TOPICS = [
         "/thrust/tau_delivered",
         "/odometry/filtered",
@@ -289,10 +290,19 @@ def single_conversion(bag_path: Path, save_dir: Path, plot_col=None):
         }
     )
 
+    time_cuts = {"sway-1": 660, "random-1": 300}
+    if bag_path.stem in time_cuts.keys():
+        df = df[df[DFKeys.TIME.value] <= time_cuts[bag_path.stem]]
+
     df = transform_to_NED(df)
+    df[DFKeys.POSITION_Z.value] = df[DFKeys.POSITION_Z.value].apply(
+        lambda depth: depth + 1
+    )  # shift origo 1 meter up from basin floor
     df = remove_orientation_flip(df)
     df = add_euler_angles(df)
+    df = integration_check(df)
 
+    save_dir = Path("data/preprocessed")
     save_path = (save_dir / bag_path.name).with_suffix(".csv")
     df.to_csv(save_path)
 
@@ -333,14 +343,7 @@ def add_euler_angles(df: pd.DataFrame, append_str="") -> pd.DataFrame:
     return df
 
 
-def full_conversion(bag_dir, save_dir):
-    for element in bag_dir.iterdir():
-        if element.is_file() and element.suffix == ".bag":
-            single_conversion(bag_path=element, save_dir=save_dir)
-
-
-def single_integration_check(csv_path: Path):
-    df = pd.read_csv(csv_path)
+def integration_check(df: DataFrame):
     dt = df[DFKeys.TIME.value].iloc[1] - df[DFKeys.TIME.value].iloc[0]
     nu = get_nu(df)
     eta = get_eta(df)
@@ -387,92 +390,78 @@ def single_integration_check(csv_path: Path):
             lambda row: row[dof + "_derivated"] - row[dof], axis=1
         )
 
-    save_dir = Path("results/integration_checks")
-    df.to_csv(save_dir / csv_path.name)
+    return df
 
 
 def integration_check_plot(csv_path: Path):
 
+    SAVE_DIR = Path("results/integration_checks")
+    PLOT_TYPE = "pdf"
     df = pd.read_csv(csv_path)
 
-    for dof in ETA_DOFS + ORIENTATIONS_EULER:
-        fig, axes = plt.subplots(2, 1, sharex=True)
+    def do_plot(dofs: List[str], append_str: str, label: str):
+        for dof in dofs:
+            fig, axes = plt.subplots(2, 1, sharex=True)
 
-        sea.lineplot(ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
-        sea.lineplot(
-            ax=axes[0],
-            x=DFKeys.TIME.value,
-            y=dof + "_integrated",
-            data=df,
-            label="Integrated",
-        )
-        sea.lineplot(
-            ax=axes[1],
-            x=DFKeys.TIME.value,
-            y=dof + "_difference",
-            data=df,
-            label="Integrated - Measured",
-        )
+            sea.lineplot(
+                ax=axes[0],
+                data=df[[dof, dof + append_str, DFKeys.TIME.value]].set_index(
+                    DFKeys.TIME.value
+                ),
+            )
+            sea.lineplot(
+                ax=axes[1],
+                x=DFKeys.TIME.value,
+                y=dof + "_difference",
+                data=df,
+                legend=False,
+            )
 
-        axes[0].set_ylabel(dof)
-        axes[1].set_ylabel("Difference")
+            axes[0].set_ylabel(dof)
+            axes[0].legend(labels=["Measured", label])
+            axes[1].set_ylabel("Error")
+            axes[1].set_xlabel("Seconds")
 
-        plt.savefig(csv_path.parent / ("%s-%s.%s" % (csv_path.stem, dof, PLOT_TYPE)))
-        plt.close(fig)
+            if dof in [DFKeys.POSITION_Z.value, DFKeys.HEAVE.value]:
+                axes[0].invert_yaxis()
 
-    for dof in NU_DOFS:
-        fig, axes = plt.subplots(2, 1, sharex=True)
+            plt.savefig(SAVE_DIR / ("%s-%s.%s" % (csv_path.stem, dof, PLOT_TYPE)))
+            plt.close(fig)
 
-        sea.lineplot(ax=axes[0], x=DFKeys.TIME.value, y=dof, data=df, label="Measured")
-        sea.lineplot(
-            ax=axes[0],
-            x=DFKeys.TIME.value,
-            y=dof + "_derivated",
-            data=df,
-            label="Derivated",
-        )
-        sea.lineplot(
-            ax=axes[1],
-            x=DFKeys.TIME.value,
-            y=dof + "_difference",
-            data=df,
-            label="Derivated - Measured",
-        )
-
-        axes[0].set_ylabel(dof)
-        axes[1].set_ylabel("Difference")
-
-        plt.savefig(csv_path.parent / ("%s-%s.%s" % (csv_path.stem, dof, PLOT_TYPE)))
-        plt.close(fig)
+    do_plot(ETA_DOFS + ORIENTATIONS_EULER, "_integrated", "Integrated")
+    do_plot(NU_DOFS, "_derivated", "Derivated")
 
 
-def full_integration_check(df_dir: Path):
-    for element in df_dir.iterdir():
-        if element.is_file() and element.suffix == ".csv":
-            single_integration_check(csv_path=element)
+def save_describtion(csv_path: Path) -> None:
+    df = pd.read_csv(csv_path)[TAU_DOFS + NU_DOFS + ETA_EULER_DOFS]
+    save_dir = Path("results/descriptions")
+    save_path = save_dir / (csv_path.stem + ".tex")
+    df.describe(percentiles=[0.5]).transpose().to_latex(
+        save_path,
+        columns=["count", "mean", "std", "50%", "min", "max"],
+        header=["N", "mean", "std", "median", "min", "max"],
+        caption="Statistical description of $\\boldsymbol{\\tau}$, $\\boldsymbol{\\nu}$ and $\\boldsymbol{\\eta}$ in "
+        + csv_path.stem,
+        label="tab:description-" + csv_path.stem,
+        float_format="{:0.2f}".format,
+        position="hb",
+    )
 
 
-def full_integration_check_plot(checks_dir: Path):
-    for element in checks_dir.iterdir():
-        if element.is_file() and element.suffix == ".csv":
-            integration_check_plot(element)
+def apply_to_all(function: Callable, dir: Path, suffix=".csv") -> None:
+    for element in dir.iterdir():
+        if element.is_file() and element.suffix == suffix:
+            function(element)
 
 
 if __name__ == "__main__":
-    PLOT_TYPE = "jpg"
 
     BAG_DIR = Path("data/raw")
-    SAVE_DIR = Path("data/preprocessed")
-
     DF_DIR = Path("data/preprocessed")
-    IC_DIR = Path("results/integration_checks")
 
-    # full_conversion(BAG_DIR, SAVE_DIR)
-    # full_integration_check(DF_DIR)
-    full_integration_check_plot(IC_DIR)
+    # apply_to_all(single_conversion, BAG_DIR, ".bag")
+    apply_to_all(integration_check_plot, DF_DIR)
+    # apply_to_all(save_describtion, DF_DIR)
 
-    # single_conversion(BAG_DIR / "surge-1.bag", SAVE_DIR)
-
-    # df = pd.read_csv(DF_DIR / "yaw-1.csv")
-    # df = remove_orientation_flip(df)
-    # df.to_csv(DF_DIR / "yaw-1.csv")
+    # single_conversion(BAG_DIR / "heave-1.bag")
+    # integration_check_plot(DF_DIR / "heave-1.csv")
