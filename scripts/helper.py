@@ -3,6 +3,7 @@ from enum import Enum
 import io
 from pathlib import Path
 import pstats
+from numba import njit
 
 import numpy as np
 import pandas as pd
@@ -74,27 +75,46 @@ ETA_EULER_DOFS = POSITIONS + ORIENTATIONS_EULER
 NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
 
-def rotation(quat: np.ndarray) -> Rotation:
+@njit
+def rotation(quat: np.ndarray) -> np.ndarray:
     """Takes a quaternion on the form [eta, eps1, eps2, eps3] and
-    returns a scipy rotation object. The function is useful since it
-    converts the quaternion to the form scipy uses [eps1, eps2, eps3, eta]
+    returns rotation matrix given by 2.72 in fossen2021draft.
 
     Args:
         quat (np.ndarray): quaternion on the form [eta, eps1, eps2, eps3]
 
     Returns:
-        Rotation: scipy rotation object
+        np.ndarray: rotation matrix
     """
 
-    eta = quat[0]
-    eps1 = quat[1]
-    eps2 = quat[2]
-    eps3 = quat[3]
+    eta: float = quat[0]
+    eps1: float = quat[1]
+    eps2: float = quat[2]
+    eps3: float = quat[3]
 
-    return Rotation.from_quat([eps1, eps2, eps3, eta])
+    return np.array(
+        [
+            [
+                1 - 2 * (eps2 ** 2 + eps3 ** 2),
+                2 * (eps1 * eps2 - eps3 * eta),
+                2 * (eps1 * eps3 + eps2 * eta),
+            ],
+            [
+                2 * (eps1 * eps2 + eps3 * eta),
+                1 - 2 * (eps1 ** 2 + eps3 ** 2),
+                2 * (eps2 * eps3 - eps1 * eta),
+            ],
+            [
+                2 * (eps1 * eps3 - eps2 * eta),
+                2 * (eps2 * eps3 + eps1 * eta),
+                1 - 2 * (eps1 ** 2 + eps2 ** 2),
+            ],
+        ]
+    )
 
 
-def Jq(eta: np.ndarray) -> np.ndarray:
+@njit
+def Jq(eta_body: np.ndarray) -> np.ndarray:
     """Rotation matrix using quaternions.
 
     The function is based on Fossen chapter 2.2
@@ -109,27 +129,67 @@ def Jq(eta: np.ndarray) -> np.ndarray:
         np.ndarray: rotation matrix from BODY to NED
     """
 
-    eta_quat = eta[3]
-    eps1 = eta[4]
-    eps2 = eta[5]
-    eps3 = eta[6]
+    eta = eta_body[3]
+    eps1 = eta_body[4]
+    eps2 = eta_body[5]
+    eps3 = eta_body[6]
 
     J = np.zeros((7, 6))
 
     # define rotation T
-    J[0:3, 0:3] = rotation(eta[3:7]).as_matrix()
+    J[0:3, 0:3] = np.array(
+        [
+            [
+                1 - 2 * (eps2 ** 2 + eps3 ** 2),
+                2 * (eps1 * eps2 - eps3 * eta),
+                2 * (eps1 * eps3 + eps2 * eta),
+            ],
+            [
+                2 * (eps1 * eps2 + eps3 * eta),
+                1 - 2 * (eps1 ** 2 + eps3 ** 2),
+                2 * (eps2 * eps3 - eps1 * eta),
+            ],
+            [
+                2 * (eps1 * eps3 - eps2 * eta),
+                2 * (eps2 * eps3 + eps1 * eta),
+                1 - 2 * (eps1 ** 2 + eps2 ** 2),
+            ],
+        ]
+    )
 
     # define rotation R
     J[3:7, 3:6] = 0.5 * np.array(
-        [  # TODO: optimize performance. Array creation is slow
+        [
             [-eps1, -eps2, -eps3],
-            [eta_quat, -eps3, eps2],
-            [eps3, eta_quat, -eps1],
-            [-eps2, eps1, eta_quat],
+            [eta, -eps3, eps2],
+            [eps3, eta, -eps1],
+            [-eps2, eps1, eta],
         ]
     )
 
     return J
+
+
+@njit
+def normalize(v: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v
+    return v / norm
+
+
+@njit
+def mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    """Mean squared error between two 2D arrays
+
+    Args:
+        y_true (np.ndarray): measurements
+        y_pred (np.ndarray): predicted values
+
+    Returns:
+        np.ndarray: array of squared errors
+    """
+    return np.square(np.subtract(y_true, y_pred)).sum(axis=0) / y_pred.shape[0]
 
 
 def get_nu(df: pd.DataFrame) -> np.ndarray:
