@@ -1,12 +1,15 @@
 import cProfile
 from enum import Enum
 import io
+from math import cos, sin, degrees, radians
 from pathlib import Path
 import pstats
+from typing import List
 from numba import njit
 
 import numpy as np
 import pandas as pd
+from pyquaternion import Quaternion
 from scipy.spatial.transform import Rotation
 
 
@@ -76,15 +79,17 @@ NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
 
 @njit
-def rotation(quat: np.ndarray) -> np.ndarray:
-    """Takes a quaternion on the form [eta, eps1, eps2, eps3] and
-    returns rotation matrix given by 2.72 in fossen2021draft.
+def R(quat: np.ndarray) -> np.ndarray:
+    """Compute rotation matrix from BODY to NED given
+    a quaternion on the form [eta, eps1, eps2, eps3]
+
+    Based on 2.72 in fossen 2021 draft.
 
     Args:
         quat (np.ndarray): quaternion on the form [eta, eps1, eps2, eps3]
 
     Returns:
-        np.ndarray: rotation matrix
+        np.ndarray: linear velocity rotation matrix
     """
 
     eta: float = quat[0]
@@ -114,13 +119,36 @@ def rotation(quat: np.ndarray) -> np.ndarray:
 
 
 @njit
-def Jq(eta_body: np.ndarray) -> np.ndarray:
-    """Rotation matrix using quaternions.
+def T(quat: np.ndarray) -> np.ndarray:
+    """Computes angular velocity rotation matrix from BODY to NED.
+    Based on 2.78) in fossen 2021 draft
 
-    The function is based on Fossen chapter 2.2
+    Args:
+        quat (np.ndarray): quaternion on the form [eta, eps1, eps2, eps3]
 
-    Caution: scipy rotations expect quaternions as [eps1, eps2, eps3, eta] while
-    the book uses [eta, eps1, eps2, eps3]
+    Returns:
+        np.ndarray: angular velocity rotation matrix
+    """
+
+    eta: float = quat[0]
+    eps1: float = quat[1]
+    eps2: float = quat[2]
+    eps3: float = quat[3]
+
+    return 0.5 * np.array(
+        [
+            [-eps1, -eps2, -eps3],
+            [eta, -eps3, eps2],
+            [eps3, eta, -eps1],
+            [-eps2, eps1, eta],
+        ]
+    )
+
+
+@njit
+def Jq(eta: np.ndarray) -> np.ndarray:
+    """Combined R and T rotation matrix for transform of nu.
+    Based on eq 2.83) from fossen 2021 draft
 
     Args:
         eta (np.ndarray): position and orientation (quat) in NED
@@ -129,43 +157,10 @@ def Jq(eta_body: np.ndarray) -> np.ndarray:
         np.ndarray: rotation matrix from BODY to NED
     """
 
-    eta = eta_body[3]
-    eps1 = eta_body[4]
-    eps2 = eta_body[5]
-    eps3 = eta_body[6]
-
+    orientation = eta[3:7]
     J = np.zeros((7, 6))
-
-    # define rotation T
-    J[0:3, 0:3] = np.array(
-        [
-            [
-                1 - 2 * (eps2 ** 2 + eps3 ** 2),
-                2 * (eps1 * eps2 - eps3 * eta),
-                2 * (eps1 * eps3 + eps2 * eta),
-            ],
-            [
-                2 * (eps1 * eps2 + eps3 * eta),
-                1 - 2 * (eps1 ** 2 + eps3 ** 2),
-                2 * (eps2 * eps3 - eps1 * eta),
-            ],
-            [
-                2 * (eps1 * eps3 - eps2 * eta),
-                2 * (eps2 * eps3 + eps1 * eta),
-                1 - 2 * (eps1 ** 2 + eps2 ** 2),
-            ],
-        ]
-    )
-
-    # define rotation R
-    J[3:7, 3:6] = 0.5 * np.array(
-        [
-            [-eps1, -eps2, -eps3],
-            [eta, -eps3, eps2],
-            [eps3, eta, -eps1],
-            [-eps2, eps1, eta],
-        ]
-    )
+    J[0:3, 0:3] = R(orientation)
+    J[3:7, 3:6] = T(orientation)
 
     return J.astype(np.float64)
 
@@ -206,6 +201,39 @@ def is_poistive_def(A: np.ndarray) -> bool:
 def is_symmetric(A: np.ndarray) -> bool:
     tol = 1e-8
     return (np.abs(A - A.T) < tol).all()
+
+
+def quat_to_degrees(q_w: float, q_x: float, q_y: float, q_z: float) -> np.ndarray:
+    """Convert a quaternion to degrees using the zyx convetion
+
+    Args:
+        q_w (float): [description]
+        q_x (float): [description]
+        q_y (float): [description]
+        q_z (float): [description]
+
+    Returns:
+        List[float]: list with roll, pitch, yaw in degrees
+    """
+    yaw, pitch, roll = Quaternion(
+        w=q_w,
+        x=q_x,
+        y=q_y,
+        z=q_z,
+    ).yaw_pitch_roll
+    return np.array([degrees(x) for x in [roll, pitch, yaw]])
+
+
+def degrees_to_quat_rotation(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    r = Rotation.from_euler("zyx", [yaw, pitch, roll], degrees=True)
+    q_x, q_y, q_z, q_w = r.as_quat()
+    return np.array([q_w, q_x, q_y, q_z])
+
+
+def radians_to_quat_rotation(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    r = Rotation.from_euler("zyx", [yaw, pitch, roll])
+    q_x, q_y, q_z, q_w = r.as_quat()
+    return np.array([q_w, q_x, q_y, q_z])
 
 
 def get_nu(df: pd.DataFrame) -> np.ndarray:
