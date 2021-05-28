@@ -167,7 +167,7 @@ def Jq(eta_body: np.ndarray) -> np.ndarray:
         ]
     )
 
-    return J
+    return J.astype(np.float64)
 
 
 @njit
@@ -175,7 +175,7 @@ def normalize(v: np.ndarray) -> np.ndarray:
     norm = np.linalg.norm(v)
     if norm == 0:
         return v
-    return v / norm
+    return (v / norm).astype(np.float64)
 
 
 @njit
@@ -189,7 +189,23 @@ def mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: array of squared errors
     """
-    return np.square(np.subtract(y_true, y_pred)).sum(axis=0) / y_pred.shape[0]
+    return (
+        np.square(np.subtract(y_true, y_pred)).sum(axis=0) / y_pred.shape[0]
+    ).astype(np.float64)
+
+
+@njit
+def is_poistive_def(A: np.ndarray) -> bool:
+    if is_symmetric(A):
+        return (np.linalg.eigvals(A) > 0).all()
+    else:
+        return False
+
+
+@njit
+def is_symmetric(A: np.ndarray) -> bool:
+    tol = 1e-8
+    return (np.abs(A - A.T) < tol).all()
 
 
 def get_nu(df: pd.DataFrame) -> np.ndarray:

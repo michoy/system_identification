@@ -67,8 +67,7 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     eta = X[0:7]  # position and orientation in NED frame
     nu = X[7:13]  # velocity in BODY frame
 
-    orientation = eta[3:7]  # orientation in quaternions
-    Jq = helper.Jq(orientation)  # rotation of eta from BODY to NED
+    Jq = helper.Jq(eta)  # rotation of eta from BODY to NED
     R = Jq[0:3, 0:3]
 
     M_inv = np.linalg.inv(M)  # inverse mass matrix
@@ -80,7 +79,7 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     g = -np.concatenate(
         (  # restoring forces in BODY
             fg_body + fb_body,
-            np.cross(rb, fg_body) + np.cross(rb, fb_body),
+            np.cross(rg, fg_body) + np.cross(rb, fb_body),
         )
     )
 
@@ -88,4 +87,4 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     eta_dot = Jq @ nu
     nu_dot = M_inv @ tau - M_inv @ D @ nu - M_inv @ g
 
-    return np.concatenate((eta_dot, nu_dot))
+    return np.concatenate((eta_dot, nu_dot)).astype(np.float64)
