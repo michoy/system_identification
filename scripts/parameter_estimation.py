@@ -64,7 +64,7 @@ class SlowDiagonalModel(Problem):
         )
 
 
-@njit(parallel=True, fastmath=True)
+# @njit(parallel=True, fastmath=True)
 def compiled_evaluation(
     designs,
     state_space_equation,
@@ -97,7 +97,7 @@ def compiled_evaluation(
     return f, g
 
 
-@njit(fastmath=True)
+# @njit(fastmath=True)
 def predict(
     state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
     initial_state: np.ndarray,
@@ -176,10 +176,14 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
     SURGE_PATH = Path("data/preprocessed/surge-1.csv")
-    SAVE_PATH = Path("results/parameter_estimation/slow_diagonal_model/attempt-1.obj")
+    SYNTHETIC_DIR = Path("data/synthetic")
+    SAVE_PATH = Path(
+        "results/parameter_estimation/slow_diagonal_model/synthetic-random-1.obj"
+    )
     DTYPE = np.float64
 
-    df = pd.read_csv(SURGE_PATH).head(1000)
+    df = pd.read_csv(SYNTHETIC_DIR / "random-1.csv").head(100)
+
     tau = np.ascontiguousarray(df[TAU_DOFS].to_numpy(), dtype=DTYPE)
     y_measured = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].to_numpy(), dtype=DTYPE)
     x0 = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].loc[0].to_numpy(), dtype=DTYPE)

@@ -33,7 +33,7 @@ def auv_1DOF_simplified(
     return [x_dot, u_dot]
 
 
-@njit
+# @njit
 def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """Simplified model of AUV in 6DOF with purly diagonal matrices.
 
@@ -71,7 +71,7 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     Jq = helper.Jq(eta)  # rotation of eta from BODY to NED
     R = helper.R(orientation)
 
-    M_inv = np.linalg.inv(M)  # inverse mass matrix
+    M_inv = np.linalg.inv(M)  # TODO: make it robuts to singular matrecies
 
     fg_ned = np.array([0, 0, W])
     fb_ned = np.array([0, 0, -B])
