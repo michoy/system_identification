@@ -364,6 +364,29 @@ class SlowDiagonalModelTests(unittest.TestCase):
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
 
+    def test_non_invertible_M(self):
+        M = [10, 10, 0, 10, 10, 10]
+        D = [10, 10, 10, 10, 10, 10]
+        W = [0]
+        B = [10]
+        COG = [0, 0, 0]
+        COB = [1, 0, 0]
+
+        # input
+        position = [0, 0, 0]
+        roll, pitch, yaw = [90, 0, 0]
+        nu = [0, 0, 0, 0, 0, 0]
+        tau = [0, 0, 0, 0, 0, 0]
+
+        orientation = degrees_to_quat_rotation(roll, pitch, yaw).tolist()
+        eta = position + orientation
+        state = np.array(eta + nu, dtype=np.float64)
+        parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
+        thrust = np.array(tau, dtype=np.float64)
+        x_dot = diagonal_slow(state, thrust, parameters)
+
+        self.assertTrue(np.isnan(x_dot).all())
+
 
 if __name__ == "__main__":
     unittest.main()

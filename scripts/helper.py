@@ -1,5 +1,6 @@
 import cProfile
 from enum import Enum
+import enum
 import io
 from math import cos, sin, degrees, radians
 from pathlib import Path
@@ -79,6 +80,7 @@ NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
 PREPROCESSED_DIR = Path("data/preprocessed")
 SYNTHETIC_DIR = Path("data/synthetic")
+ESTIMATED_DIR = Path("results/parameter_estimation")
 
 
 @njit
@@ -193,6 +195,42 @@ def mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
 
 
 @njit
+def mean_absolute_error(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    """Mean absolute error between two 2D arrays
+
+    Args:
+        y_true (np.ndarray): measurements
+        y_pred (np.ndarray): predicted values
+
+    Returns:
+        np.ndarray: array of squared errors
+    """
+    return np.absolute(
+        (np.subtract(y_true, y_pred)).sum(axis=0) / y_pred.shape[0]
+    ).astype(np.float64)
+
+
+@njit
+def mean_absolute_error_with_log(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    """Mean absolute error between two 2D arrays
+
+    Args:
+        y_true (np.ndarray): measurements
+        y_pred (np.ndarray): predicted values
+
+    Returns:
+        np.ndarray: array of squared errors
+    """
+    errors_abs = np.absolute(
+        (np.subtract(y_true, y_pred)).sum(axis=0) / y_pred.shape[0]
+    ).astype(np.float64)
+    for i, error in enumerate(errors_abs):
+        if error > 1:
+            errors_abs[i] = np.log(error)
+    return errors_abs
+
+
+@njit
 def is_poistive_def(A: np.ndarray) -> bool:
     if is_symmetric(A):
         return (np.linalg.eigvals(A) > 0).all()
@@ -204,6 +242,21 @@ def is_poistive_def(A: np.ndarray) -> bool:
 def is_symmetric(A: np.ndarray) -> bool:
     tol = 1e-8
     return (np.abs(A - A.T) < tol).all()
+
+
+@njit
+def normalizer(x: np.ndarray, normalize_quaternions: bool) -> np.ndarray:
+    """Normalize quaternions in eta of a full state [eta, nu]
+
+    Args:
+        x (np.ndarray): full state [eta, nu]
+
+    Returns:
+        np.ndarray: [eta, nu] with normalized quaternions
+    """
+    if normalize_quaternions:
+        x[3:7] = normalize(x[3:7])
+    return x
 
 
 def quat_to_degrees(q_w: float, q_x: float, q_y: float, q_z: float) -> np.ndarray:
@@ -294,6 +347,10 @@ def profile(func):
         return retval
 
     return wrapper
+
+
+def load_tau(csv_path: Path):
+    return pd.read_csv(csv_path)[TAU_DOFS].to_numpy(dtype=np.float64)
 
 
 def load_data(

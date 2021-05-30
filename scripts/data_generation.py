@@ -1,76 +1,63 @@
 from pathlib import Path
-from typing import Callable
+from typing import Callable, List, Union
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import count
 
-from auv_models import diagonal_slow
-from helper import DFKeys, ETA_DOFS, NU_DOFS, TAU_DOFS, normalize
-
-
-def generate_states(
-    state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
-    inputs: np.ndarray,
-    parameters: np.ndarray,
-    dt: float,
-) -> np.ndarray:
-
-    num_elements = len(inputs)
-    num_states = 13
-    synthetic_data = np.empty((num_elements, num_states), dtype=np.float64)
-
-    eta_initial = [0, 0, 0, 1, 0, 0, 0]
-    nu_initial = [0, 0, 0, 0, 0, 0]
-    x = np.array(eta_initial + nu_initial, dtype=np.float64)
-    synthetic_data[0] = x
-
-    for i, tau in enumerate(inputs):
-        x_dot = state_space_equation(x, tau, parameters)
-        x += x_dot * dt
-        x[3:7] = normalize(x[3:7])
-        synthetic_data[i] = x
-
-    return synthetic_data
+from auv_models import auv_1DOF_simplified, diagonal_slow
+from helper import DFKeys, ETA_DOFS, NU_DOFS, SYNTHETIC_DIR, TAU_DOFS
+from parameter_estimation import predict
 
 
 def synthesize_dataset(
-    params: np.ndarray, input_path: Path, save: bool = False
+    state_space_equation,
+    x0: np.ndarray,
+    params: np.ndarray,
+    tau: np.ndarray,
+    colums: List[str],
+    normalize_quaternions: bool,
+    save_name: Union[None, str] = None,
 ) -> pd.DataFrame:
-
-    df_input = pd.read_csv(input_path)
-    tau = df_input[TAU_DOFS].to_numpy()
 
     dt = 0.1
     time = np.round(
         np.matrix([t for t, _tmp in zip(count(step=dt), tau)]).T, decimals=1
     )
 
-    states = generate_states(
-        state_space_equation=diagonal_slow, inputs=tau, parameters=params, dt=dt
-    )
+    states = predict(state_space_equation, x0, tau, dt, params, normalize_quaternions)
 
     data = np.concatenate((time, tau, states), axis=1)
 
     df = pd.DataFrame(data)
-    df.columns = [DFKeys.TIME.value] + TAU_DOFS + ETA_DOFS + NU_DOFS
+    df.columns = colums
 
-    if save:
-        save_path = Path("data/synthetic") / input_path.name
+    if save_name:
+        save_path = SYNTHETIC_DIR / save_name
         df.to_csv(save_path)
 
     return df
 
 
 if __name__ == "__main__":
-    input_path = Path("data/preprocessed/surge-1.csv")
 
-    M = [30, 60, 60, 10, 30, 30]
-    D = [30, 60, 60, 10, 30, 30]
-    W = [25]
-    B = [24]
-    COG = [0, 0, 0]
-    COB = [0, 0, -0.1]
-    theta = np.array(M + D + W + B + COG + COB)
+    m = 30
+    d = 30
+    theta = np.array([m, d], dtype=np.float64)
 
-    synthesize_dataset(params=theta, input_path=input_path, save=True)
+    tau_1 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
+    tau_2 = [[10, 0, 0, 0, 0, 0] for _i in range(100)]
+    tau_3 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
+    tau_4 = [[-10, 0, 0, 0, 0, 0] for _i in range(100)]
+    tau_5 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
+    tau = np.array(tau_1 + tau_2 + tau_3 + tau_4 + tau_5, dtype=np.float64)
+
+    x0 = np.array([0, 0], dtype=np.float64)
+
+    columns = (
+        [DFKeys.TIME.value] + TAU_DOFS + [DFKeys.POSITION_X.value, DFKeys.SURGE.value]
+    )
+
+    save_name = "only_surge.csv"
+
+    synthesize_dataset(auv_1DOF_simplified, x0, theta, tau, columns, False, save_name)

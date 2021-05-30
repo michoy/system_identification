@@ -8,7 +8,7 @@ import helper
 @njit
 def auv_1DOF_simplified(
     state: np.ndarray, thrust: np.ndarray, parameters: np.ndarray
-) -> list:
+) -> np.ndarray:
     """AUV equation of motion for low velocities in 1DOF (surge)
 
     Args:
@@ -31,7 +31,7 @@ def auv_1DOF_simplified(
     x_dot = u
     u_dot = -(d / m) * u + (1 / m) * thrust[0]
 
-    return [x_dot, u_dot]
+    return np.array([x_dot, u_dot])
 
 
 @njit
@@ -75,6 +75,7 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
 
     # check if M is invertible
     if np.linalg.det(M) == 0:
+        print("Non-invertible mass matrix M recieved in diagonal_slow")
         return np.full(len(X), np.nan)
     M_inv = np.linalg.inv(M)
 
