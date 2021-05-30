@@ -77,6 +77,9 @@ ETA_DOFS = POSITIONS + ORIENTATIONS_QUAT
 ETA_EULER_DOFS = POSITIONS + ORIENTATIONS_EULER
 NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
+PREPROCESSED_DIR = Path("data/preprocessed")
+SYNTHETIC_DIR = Path("data/synthetic")
+
 
 @njit
 def R(quat: np.ndarray) -> np.ndarray:
@@ -291,3 +294,24 @@ def profile(func):
         return retval
 
     return wrapper
+
+
+def load_data(
+    csv_path: Path, head_num=None, dtype=np.float64
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if head_num:
+        df = pd.read_csv(csv_path).head(head_num)
+    else:
+        df = pd.read_csv(csv_path)
+    return numpy_from_df(df, dtype=dtype)
+
+
+def numpy_from_df(
+    df: pd.DataFrame, dtype=np.float64
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    tau = np.ascontiguousarray(df[TAU_DOFS].to_numpy(), dtype=dtype)
+    y_measured = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].to_numpy(), dtype=dtype)
+    x0 = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].loc[0].to_numpy(), dtype=dtype)
+    timesteps = np.ascontiguousarray(df[DFKeys.TIME.value].to_numpy(), dtype=dtype)
+
+    return x0, tau, y_measured, timesteps

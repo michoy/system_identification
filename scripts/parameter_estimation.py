@@ -1,7 +1,7 @@
 import pickle
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Union
 import logging
 
 import matplotlib.pyplot as plt
@@ -9,27 +9,46 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from numba import njit, prange
-from pandas.core.frame import DataFrame
 from pymoo.algorithms.nsga2 import NSGA2
 from pymoo.model.problem import Problem
 from pymoo.optimize import minimize
+from pymoo.util.display import Display, MultiObjectiveDisplay
 
 from auv_models import diagonal_slow
+from data_generation import synthesize_dataset
 from helper import (
     DFKeys,
     ETA_DOFS,
     NU_DOFS,
+    PREPROCESSED_DIR,
+    SYNTHETIC_DIR,
     TAU_DOFS,
+    load_data,
     mean_squared_error,
     normalize,
+    numpy_from_df,
     profile,
     is_poistive_def,
 )
 
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
-class SlowDiagonalModel(Problem):
-    def __init__(self, tau, y_measured, x0, dtype=np.float64):
 
+class UUVParameterProblem(Problem):
+    def __init__(
+        self,
+        state_space_equation: Callable,
+        tau: np.ndarray,
+        y_measured: np.ndarray,
+        x0: np.ndarray,
+        n_var: float,
+        n_obj: float,
+        n_constr: float,
+        dtype=np.float64,
+    ):
+
+        self.state_space_equation = state_space_equation
         self.tau = tau
         self.y_measured = y_measured
         self.x0 = x0
@@ -52,19 +71,34 @@ class SlowDiagonalModel(Problem):
         x_lower[14:20] = -0.2  # bounds on CG and CB
         x_upper[14:20] = 0.2
 
-        super().__init__(n_var=20, n_obj=6, n_constr=1, xl=x_lower, xu=x_upper)
+        super().__init__(
+            n_var=n_var, n_obj=n_obj, n_constr=n_constr, xl=x_lower, xu=x_upper
+        )
 
     def _evaluate(self, designs, out, *args, **kwargs):
-        out["F"], out["G"] = compiled_evaluation(
+        out["F"] = compiled_evaluation(
             designs=designs,
-            state_space_equation=diagonal_slow,
+            state_space_equation=self.state_space_equation,
             x0=self.x0,
             inputs=self.tau,
             y_measured=self.y_measured,
         )
+        nan_count = 0
+        for objectives in out["F"]:
+            if np.isnan(objectives).any():
+                nan_count += 1
+        log.info("objectives with nan: " + str(nan_count))
 
 
-# @njit(parallel=True, fastmath=True)
+class MyDisplay(MultiObjectiveDisplay):
+    def _do(self, problem, evaluator, algorithm):
+        super()._do(problem, evaluator, algorithm)
+        self.output.append("f_mean", np.mean(algorithm.pop.get("F")))
+        self.output.append("f_min", algorithm.pop.get("F").min())
+        self.output.append("f_max", algorithm.pop.get("F").max())
+
+
+@njit(parallel=True)
 def compiled_evaluation(
     designs,
     state_space_equation,
@@ -75,7 +109,6 @@ def compiled_evaluation(
     dtypte=np.float64,
 ):
     f = np.empty((len(designs), 13), dtype=dtypte)
-    g = np.empty(len(designs), dtype=dtypte)
     for i in prange(len(designs)):
         y_predicted = predict(
             state_space_equation=state_space_equation,
@@ -84,20 +117,17 @@ def compiled_evaluation(
             step_length=step_length,
             parameters=designs[i],
         )
-
-        nu_predicted = y_predicted[7:13]
-        nu_measured = y_measured[7:13]
-        f[i] = mean_squared_error(nu_measured, nu_predicted)
-
-        M = np.diag(designs[i][0:6])
-        if is_poistive_def(M):
-            g[i] = 0
+        if np.isnan(y_predicted).any():
+            f[i] = np.full(13, np.nan)
         else:
-            g[i] = 1
-    return f, g
+            nu_predicted = y_predicted[7:13]
+            nu_measured = y_measured[7:13]
+            f[i] = mean_squared_error(nu_measured, nu_predicted)
+
+    return f
 
 
-# @njit(fastmath=True)
+@njit
 def predict(
     state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
     initial_state: np.ndarray,
@@ -116,8 +146,11 @@ def predict(
         # integrate state change
         x_dot = state_space_equation(x, u, parameters) * step_length
 
-        # if (np.abs(x_dot) > 100000).any():
-        #     print("x_dot above max for i: " + str(i))
+        # return none if state space equation reached an illegal state
+        if np.isnan(x_dot).any():
+            states[:] = np.nan
+            return states
+
         x += x_dot
 
         # normalize quaternions
@@ -130,64 +163,73 @@ def predict(
     return states
 
 
-def plot_predict(
-    state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
-    initial_state: np.ndarray,
-    inputs: np.ndarray,
-    parameters: np.ndarray,
-    y_measured: np.ndarray,
-    timesteps: np.ndarray,
+def calculate_pareto_front(
+    state_space_equation,
+    tau,
+    y_measured,
+    x0,
+    n_var=20,
+    n_obj=6,
+    n_constr=0,
+    pop_size=100,
+    max_gen: Union[float, None] = None,
+    save_dir: Union[Path, None] = None,
+    verbose=True,
+    save_history=True,
+    display=MyDisplay(),
 ):
-    y_predicted = predict(state_space_equation, initial_state, inputs, 0.1, parameters)
-    dofs = ETA_DOFS + NU_DOFS
-    for dof, i in zip(dofs, range(len(dofs))):
-        plt.plot(timesteps, y_predicted[:, i], label="predicted")
-        plt.plot(timesteps, y_measured[:, i], label="measured")
-        plt.title(dof)
-        plt.legend()
-        plt.savefig(
-            "results/parameter_estimation/slow_diagonal_model/trials/%s.jpg" % dof
+
+    # calculate pareto frontier
+    problem = UUVParameterProblem(
+        state_space_equation,
+        tau,
+        y_measured,
+        x0,
+        n_var=n_var,
+        n_obj=n_obj,
+        n_constr=n_constr,
+    )
+    algorithm = NSGA2(pop_size=pop_size)
+    if max_gen:
+        stop_criteria = ("n_gen", max_gen)
+        res = minimize(
+            problem,
+            algorithm,
+            stop_criteria,
+            verbose=verbose,
+            display=display,
+            save_history=save_history,
         )
-        plt.close()
+    else:
+        res = minimize(
+            problem,
+            algorithm,
+            verbose=verbose,
+            display=display,
+            save_history=save_history,
+        )
 
+    # save results
+    if save_dir:
+        Path.mkdir(save_dir, parents=True, exist_ok=True)
+        save_path = save_dir / "trial"
+        with save_path.with_suffix(".obj").open("wb") as file:
+            pickle.dump(res, file)
 
-def estimate(tau, y_true, x0, save_path: Path):
-    problem = SlowDiagonalModel(tau, y_true, x0)
-    algorithm = NSGA2(pop_size=100)
-    stop_criteria = ("n_gen", 1000)
-
-    res = minimize(problem, algorithm)
-
-    with save_path.with_suffix(".obj").open("wb") as file:
-        pickle.dump(res, file)
-
-    df = pd.DataFrame(res.F)
-    df.to_csv(save_path.with_suffix(".csv"))
-
-    print(res.F)
-    print("Success: " + str(res.success))
+    return res, problem.pareto_front()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        filename="application.log",
-        level=logging.WARNING,
-        format="[%(asctime)s] {%(pathname)s:%(lineno)d} %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    SURGE_PATH = Path("data/preprocessed/surge-1.csv")
-    SYNTHETIC_DIR = Path("data/synthetic")
-    SAVE_PATH = Path(
-        "results/parameter_estimation/slow_diagonal_model/synthetic-random-1.obj"
-    )
-    DTYPE = np.float64
 
-    df = pd.read_csv(SYNTHETIC_DIR / "random-1.csv").head(100)
+    name = "sway-1"
 
-    tau = np.ascontiguousarray(df[TAU_DOFS].to_numpy(), dtype=DTYPE)
-    y_measured = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].to_numpy(), dtype=DTYPE)
-    x0 = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].loc[0].to_numpy(), dtype=DTYPE)
-    timesteps = np.ascontiguousarray(df[DFKeys.TIME.value].to_numpy(), dtype=DTYPE)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    fh = logging.FileHandler("logs/%s.log" % name)
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(formatter)
+    log.addHandler(fh)
 
     M = [30, 60, 60, 10, 30, 30]
     D = [30, 60, 60, 10, 30, 30]
@@ -195,7 +237,24 @@ if __name__ == "__main__":
     B = [24]
     COG = [0, 0, 0]
     COB = [0, 0, 0]
-    params = np.array(M + D + W + B + COG + COB, dtype=DTYPE)
+    params = np.array(M + D + W + B + COG + COB, dtype=np.float64)
 
-    # plot_predict(diagonal_slow, x0, tau, params, y_measured, timesteps)
-    estimate(tau, y_measured, x0, SAVE_PATH)
+    input_path = PREPROCESSED_DIR / (name + ".csv")
+    save_dir = Path("results/synthetic_data/" + name)
+
+    log.info("Synthesizing data..")
+    df = synthesize_dataset(params=params, input_path=input_path)
+    x0, tau, y_measured, time = numpy_from_df(df)
+
+    log.info("calculating pareto front..")
+    res, pareto_front = calculate_pareto_front(
+        diagonal_slow, tau, y_measured, x0, max_gen=100, save_dir=save_dir
+    )
+    log.info("pareto front: " + str(pareto_front))
+
+    found_params = False
+    for design_point in res.X:
+        if np.allclose(design_point, params):
+            found_params = True
+            break
+    log.info("found parameters: " + str(found_params))

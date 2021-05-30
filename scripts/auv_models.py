@@ -1,3 +1,4 @@
+from typing import Union
 import numpy as np
 from numba import njit
 
@@ -33,7 +34,7 @@ def auv_1DOF_simplified(
     return [x_dot, u_dot]
 
 
-# @njit
+@njit
 def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """Simplified model of AUV in 6DOF with purly diagonal matrices.
 
@@ -55,6 +56,7 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
 
     Returns:
         np.ndarray: rate of change in 6DOF position and velocity (X_dot)
+                    or array of nan if M is not invertible
     """
 
     M = np.diag(theta[0:6])  # Mass matrix (added + body)
@@ -71,7 +73,10 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     Jq = helper.Jq(eta)  # rotation of eta from BODY to NED
     R = helper.R(orientation)
 
-    M_inv = np.linalg.inv(M)  # TODO: make it robuts to singular matrecies
+    # check if M is invertible
+    if np.linalg.det(M) == 0:
+        return np.full(len(X), np.nan)
+    M_inv = np.linalg.inv(M)
 
     fg_ned = np.array([0, 0, W])
     fb_ned = np.array([0, 0, -B])

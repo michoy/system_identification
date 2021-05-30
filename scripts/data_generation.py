@@ -34,18 +34,9 @@ def generate_states(
     return synthetic_data
 
 
-def synthesize_dataset():
-
-    input_path = Path("data/preprocessed/random-1.csv")
-    save_path = Path("data/synthetic") / input_path.name
-
-    M = [30, 60, 60, 10, 30, 30]
-    D = [30, 60, 60, 10, 30, 30]
-    W = [25]
-    B = [24]
-    COG = [0, 0, 0]
-    COB = [0, 0, -0.1]
-    theta = np.array(M + D + W + B + COG + COB)
+def synthesize_dataset(
+    params: np.ndarray, input_path: Path, save: bool = False
+) -> pd.DataFrame:
 
     df_input = pd.read_csv(input_path)
     tau = df_input[TAU_DOFS].to_numpy()
@@ -56,14 +47,30 @@ def synthesize_dataset():
     )
 
     states = generate_states(
-        state_space_equation=diagonal_slow, inputs=tau, parameters=theta, dt=dt
+        state_space_equation=diagonal_slow, inputs=tau, parameters=params, dt=dt
     )
 
     data = np.concatenate((time, tau, states), axis=1)
+
     df = pd.DataFrame(data)
     df.columns = [DFKeys.TIME.value] + TAU_DOFS + ETA_DOFS + NU_DOFS
-    df.to_csv(save_path)
+
+    if save:
+        save_path = Path("data/synthetic") / input_path.name
+        df.to_csv(save_path)
+
+    return df
 
 
 if __name__ == "__main__":
-    synthesize_dataset()
+    input_path = Path("data/preprocessed/surge-1.csv")
+
+    M = [30, 60, 60, 10, 30, 30]
+    D = [30, 60, 60, 10, 30, 30]
+    W = [25]
+    B = [24]
+    COG = [0, 0, 0]
+    COB = [0, 0, -0.1]
+    theta = np.array(M + D + W + B + COG + COB)
+
+    synthesize_dataset(params=theta, input_path=input_path, save=True)
