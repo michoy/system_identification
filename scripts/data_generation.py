@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import count
 
-from auv_models import auv_1DOF_simplified, diagonal_slow
+from auv_models import auv_1DOF_simplified, diagonal_slow_without_g
 from helper import DFKeys, ETA_DOFS, NU_DOFS, SYNTHETIC_DIR, TAU_DOFS
 from parameter_estimation import predict
 

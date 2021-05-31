@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from pyquaternion.quaternion import Quaternion
 
-from auv_models import auv_1DOF_simplified, diagonal_slow
+from auv_models import auv_1DOF_simplified, diagonal_slow_without_g
 import helper
 
 

@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from auv_models import auv_1DOF_simplified, diagonal_slow
+from auv_models import auv_1DOF_simplified, diagonal_slow_without_g
 from helper import degrees_to_quat_rotation
 
 
@@ -38,7 +38,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array([0, 0, 0, 0, 0, 0], dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         self.assertEqual(type(x_dot), np.ndarray)
         self.assertEqual(len(x_dot), 13)
@@ -59,7 +59,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array([0, 0, 0, 0, 0, 0], dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
@@ -89,7 +89,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
@@ -119,7 +119,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
@@ -149,7 +149,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
@@ -183,7 +183,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
         eta_dot = x_dot[0:7]
         nu_dot = x_dot[7:13]
 
@@ -219,7 +219,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
         eta_dot = x_dot[0:7]
         nu_dot = x_dot[7:13]
 
@@ -255,7 +255,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
         eta_dot = x_dot[0:7]
         nu_dot = x_dot[7:13]
 
@@ -291,7 +291,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
         eta_dot = x_dot[0:7]
         nu_dot = x_dot[7:13]
 
@@ -327,7 +327,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
 
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
         eta_dot = x_dot[0:7]
         nu_dot = x_dot[7:13]
 
@@ -359,7 +359,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         for a, b in zip(x_dot, x_dot_expected):
             self.assertAlmostEqual(a, b)
@@ -383,7 +383,7 @@ class SlowDiagonalModelTests(unittest.TestCase):
         state = np.array(eta + nu, dtype=np.float64)
         parameters = np.array(M + D + W + B + COG + COB, dtype=np.float64)
         thrust = np.array(tau, dtype=np.float64)
-        x_dot = diagonal_slow(state, thrust, parameters)
+        x_dot = diagonal_slow_without_g(state, thrust, parameters)
 
         self.assertTrue(np.isnan(x_dot).all())
 

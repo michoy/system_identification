@@ -35,7 +35,9 @@ def auv_1DOF_simplified(
 
 
 @njit
-def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarray:
+def diagonal_slow_without_g(
+    X: np.ndarray, tau: np.ndarray, theta: np.ndarray
+) -> np.ndarray:
     """Simplified model of AUV in 6DOF with purly diagonal matrices.
 
     Assumptions:
@@ -65,6 +67,48 @@ def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarr
     B = theta[13]  # Bouancy in newton
     rg = theta[14:17]  # distance from CO to COG
     rb = theta[17:20]  # distance from CO to COB
+
+    eta = X[0:7]  # position and orientation in NED frame
+    nu = X[7:13]  # velocity in BODY frame
+    orientation = eta[3:7]
+
+    Jq = helper.Jq(eta)  # rotation of eta from BODY to NED
+    R = helper.R(orientation)
+
+    # check if M is invertible
+    if np.linalg.det(M) == 0:
+        print("Non-invertible mass matrix M recieved in diagonal_slow")
+        return np.full(len(X), np.nan)
+    M_inv = np.linalg.inv(M)
+
+    fg_ned = np.array([0, 0, W])
+    fb_ned = np.array([0, 0, -B])
+    fg_body = R.T @ fg_ned
+    fb_body = R.T @ fb_ned
+    g = -np.concatenate(
+        (  # restoring forces in BODY
+            fg_body + fb_body,
+            np.cross(rg, fg_body) + np.cross(rb, fb_body),
+        )
+    )
+
+    # equations of motion
+    eta_dot = Jq @ nu
+    nu_dot = M_inv @ tau - M_inv @ D @ nu - M_inv @ g
+
+    return np.concatenate((eta_dot, nu_dot))
+
+
+@njit
+def diagonal_slow(X: np.ndarray, tau: np.ndarray, theta: np.ndarray) -> np.ndarray:
+
+    M = np.diag(theta[0:6])  # Mass matrix (added + body)
+    D = np.diag(theta[6:12])  # Linear damping matrix
+
+    W = 25.0  # Weight in newton
+    B = 24.3  # Bouancy in newton
+    rg = np.array([0, 0, 0])  # distance from CO to COG
+    rb = np.array([0, 0, -0.1])  # distance from CO to COB
 
     eta = X[0:7]  # position and orientation in NED frame
     nu = X[7:13]  # velocity in BODY frame

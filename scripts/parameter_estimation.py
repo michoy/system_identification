@@ -19,7 +19,7 @@ from pymoo.model.problem import Problem
 from pymoo.optimize import minimize
 from pymoo.util.display import Display, MultiObjectiveDisplay
 
-from auv_models import diagonal_slow
+from auv_models import diagonal_slow_without_g
 from helper import (
     DFKeys,
     ETA_DOFS,
