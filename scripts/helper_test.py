@@ -291,5 +291,44 @@ class MseTests(unittest.TestCase):
         self.assertTrue(comparison.all())
 
 
+class ParetoTests(unittest.TestCase):
+    def test_simple_case(self):
+        F = [
+            [2.0, 2.0, 2.0],
+            [2.0, 2.0, 2.0],
+            [2.1, 2.0, 2.0],
+            [2.0, 2.0, 2.2],
+            [2, 2, 2],
+        ]
+        X = [
+            [1, 2],
+            [2, 1],
+            [3, 3],
+            [4, 4],
+            [1, 1],
+        ]
+        pareto_X, pareto_F = helper.naive_pareto(np.array(X), np.array(F))
+
+        expected_X = np.array(
+            [
+                [1, 2],
+                [2, 1],
+                [1, 1],
+            ]
+        )
+        expected_F = np.array(
+            [
+                [2.0, 2.0, 2.0],
+                [2.0, 2.0, 2.0],
+                [2, 2, 2],
+            ]
+        )
+
+        self.assertEqual(pareto_X.size, expected_X.size)
+        self.assertEqual(pareto_F.size, expected_F.size)
+        self.assertTrue(np.allclose(pareto_X, expected_X))
+        self.assertTrue(np.allclose(pareto_F, expected_F))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@ class SimplifiedSurgeAUVTest(unittest.TestCase):
         parameters = np.array([m, d])
 
         result = auv_1DOF_simplified(state, thrust, parameters)
-        self.assertEqual(result, [0.1, -0.1])
+        self.assertTrue(np.allclose(result, np.array([0.1, -0.1])))
 
 
 class SlowDiagonalModelTests(unittest.TestCase):

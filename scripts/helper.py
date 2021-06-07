@@ -5,10 +5,11 @@ import io
 from math import cos, sin, degrees, radians
 from pathlib import Path
 import pstats
-from typing import List
+from typing import List, Tuple
 from numba import njit
 
 import numpy as np
+from numpy import ndarray
 import pandas as pd
 from pyquaternion import Quaternion
 from scipy.spatial.transform import Rotation
@@ -80,7 +81,8 @@ NU_DOFS = LINEAR_VELOCITIES + ANGULAR_VELOCITIES
 
 PREPROCESSED_DIR = Path("data/preprocessed")
 SYNTHETIC_DIR = Path("data/synthetic")
-ESTIMATED_DIR = Path("results/parameter_estimation")
+PARAM_EST_DIR = Path("results/parameter_estimation")
+PARAM_EST_SIM_DIR = PARAM_EST_DIR / "simulations"
 
 
 @njit
@@ -355,7 +357,7 @@ def load_tau(csv_path: Path):
 
 def load_data(
     csv_path: Path, head_num=None, dtype=np.float64
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if head_num:
         df = pd.read_csv(csv_path).head(head_num)
     else:
@@ -365,10 +367,28 @@ def load_data(
 
 def numpy_from_df(
     df: pd.DataFrame, dtype=np.float64
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     tau = np.ascontiguousarray(df[TAU_DOFS].to_numpy(), dtype=dtype)
     y_measured = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].to_numpy(), dtype=dtype)
     x0 = np.ascontiguousarray(df[ETA_DOFS + NU_DOFS].loc[0].to_numpy(), dtype=dtype)
     timesteps = np.ascontiguousarray(df[DFKeys.TIME.value].to_numpy(), dtype=dtype)
 
     return x0, tau, y_measured, timesteps
+
+
+def dominates(a: ndarray, b: ndarray) -> bool:
+    return (a <= b).all() and (a < b).any()
+
+
+def naive_pareto(X: ndarray, F: ndarray) -> Tuple[ndarray, ndarray]:
+    pareto_x, pareto_y = list(), list()
+    for x, f in zip(X, F):
+        not_domiated = True
+        for fi in F:
+            if dominates(fi, f):
+                not_domiated = False
+                break
+        if not_domiated:
+            pareto_x.append(x)
+            pareto_y.append(f)
+    return (np.array(pareto_x), np.array(pareto_y))

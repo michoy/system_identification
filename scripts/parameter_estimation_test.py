@@ -63,7 +63,7 @@ class SyntheticDiagonalSlowWithoutGTests(unittest.TestCase):
         )
 
         # save results
-        save_dir = ESTIMATED_DIR / "synthetic"
+        save_dir = PARAM_EST_DIR / "synthetic"
         Path.mkdir(save_dir, parents=True, exist_ok=True)
         pd.DataFrame(res.X).to_csv(save_dir / "diagonal_slow_no_g_resX.csv")
         pd.DataFrame(res.F).to_csv(save_dir / "diagonal_slow_no_g_resF.csv")
@@ -115,7 +115,7 @@ class SyntheticDiagonalSlowTests(unittest.TestCase):
         )
 
         # save results
-        save_dir = ESTIMATED_DIR / "synthetic"
+        save_dir = PARAM_EST_DIR / "synthetic"
         Path.mkdir(save_dir, parents=True, exist_ok=True)
         pd.DataFrame(res.X).to_csv(save_dir / "diagonal_slow_resX.csv")
         pd.DataFrame(res.F).to_csv(save_dir / "diagonal_slow_resF.csv")
@@ -138,24 +138,27 @@ class SyntheticDiagonalSlowTests(unittest.TestCase):
 
 
 class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
-    def test_only_surge(self):
+    def test_m30_d30_s400(self):
         m = 30
         d = 30
         theta = np.array([m, d], dtype=np.float64)
 
-        tau_1 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
-        tau_2 = [[10, 0, 0, 0, 0, 0] for _i in range(100)]
-        tau_3 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
-        tau_4 = [[-10, 0, 0, 0, 0, 0] for _i in range(100)]
-        tau_5 = [[0, 0, 0, 0, 0, 0] for _i in range(10)]
-        tau = np.array(tau_1 + tau_2 + tau_3 + tau_4 + tau_5, dtype=np.float64)
+        tau = []
+        tau_break = [[0, 0, 0, 0, 0, 0] for _i in range(100)]
+        tau_pos = [[10, 0, 0, 0, 0, 0] for _i in range(100)]
+        tau_neg = [[-10, 0, 0, 0, 0, 0] for _i in range(100)]
+
+        for i in range(1):
+            tau += tau_pos + tau_break + tau_neg + tau_break
+
+        tau = np.array(tau, dtype=np.float64)
 
         x0 = np.array([0, 0], dtype=np.float64)
 
         y_measured = predict(auv_1DOF_simplified, x0, tau, 0.1, theta, False)
 
-        x_lower = np.array([10, 10], dtype=np.float64)
-        x_upper = np.array([40, 40], dtype=np.float64)
+        x_lower = np.array([1, 1], dtype=np.float64)
+        x_upper = np.array([100, 100], dtype=np.float64)
 
         res = calculate_pareto_front(
             auv_1DOF_simplified,
@@ -168,12 +171,15 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
             n_obj=2,
             normalize_quaternions=False,
         )
+        pareto_X, pareto_F = naive_pareto(res.X, res.F)
 
         # save results
-        save_dir = ESTIMATED_DIR / "synthetic"
+        save_dir = PARAM_EST_SIM_DIR / "linear_surge_model" / ("m%i_d%i" % (m, d))
         Path.mkdir(save_dir, parents=True, exist_ok=True)
-        pd.DataFrame(res.X).to_csv(save_dir / "only_surge_resX.csv")
-        pd.DataFrame(res.F).to_csv(save_dir / "only_surge_resF.csv")
+        pd.DataFrame(res.X).to_csv(save_dir / "resX.csv")
+        pd.DataFrame(res.F).to_csv(save_dir / "resF.csv")
+        pd.DataFrame(pareto_X).to_csv(save_dir / "pareto_X.csv")
+        pd.DataFrame(pareto_F).to_csv(save_dir / "pareto_F.csv")
 
         found_params = False
         for design_point in res.X:
@@ -181,6 +187,45 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
                 found_params = True
                 break
         self.assertTrue(found_params)
+
+    def test_if_resX_is_pareto(self):
+        for i in range(6):
+            m = 30
+            d = 30
+            theta = np.array([m, d], dtype=np.float64)
+
+            tau = []
+            tau_break = [[0, 0, 0, 0, 0, 0] for _i in range(100)]
+            tau_pos = [[10, 0, 0, 0, 0, 0] for _i in range(100)]
+            tau_neg = [[-10, 0, 0, 0, 0, 0] for _i in range(100)]
+
+            for i in range(1):
+                tau += tau_pos + tau_break + tau_neg + tau_break
+
+            tau = np.array(tau, dtype=np.float64)
+
+            x0 = np.array([0, 0], dtype=np.float64)
+
+            y_measured = predict(auv_1DOF_simplified, x0, tau, 0.1, theta, False)
+
+            x_lower = np.array([1, 1], dtype=np.float64)
+            x_upper = np.array([100, 100], dtype=np.float64)
+
+            res = calculate_pareto_front(
+                auv_1DOF_simplified,
+                tau,
+                y_measured,
+                x0,
+                xl=x_lower,
+                xu=x_upper,
+                n_var=2,
+                n_obj=2,
+                normalize_quaternions=False,
+            )
+            pareto_X, pareto_F = naive_pareto(res.X, res.F)
+
+            self.assertTrue(np.allclose(res.X, pareto_X))
+            self.assertTrue(np.allclose(res.F, pareto_F))
 
 
 if __name__ == "__main__":

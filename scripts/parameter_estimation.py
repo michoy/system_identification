@@ -6,8 +6,10 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy import ndarray
 import pandas as pd
 from pymoo.factory import get_sampling
+from pymoo.model.result import Result
 from pymoo.util.termination.default import MultiObjectiveDefaultTermination
 from pymoo.util.termination.x_tol import DesignSpaceToleranceTermination
 from pymoo.util.termination.f_tol import MultiObjectiveSpaceToleranceTermination
@@ -114,20 +116,41 @@ def compiled_evaluation(
 ):
     f = np.empty((len(designs), n_obj), dtype=dtypte)
     for i in prange(len(designs)):
-        y_predicted = predict(
+        f[i] = objective_function(
             state_space_equation=state_space_equation,
             initial_state=x0,
             inputs=inputs,
             step_length=step_length,
             parameters=designs[i],
             normalize_quaternions=normalize_quaternions,
+            y_measured=y_measured,
         )
-        if np.isnan(y_predicted).any():
-            f[i] = np.full(n_obj, NAN_FILLER)
-        else:
-            f[i] = mean_absolute_error(y_measured, y_predicted)
 
     return f
+
+
+@njit
+def objective_function(
+    state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
+    initial_state: np.ndarray,
+    inputs: np.ndarray,
+    parameters: np.ndarray,
+    normalize_quaternions: bool,
+    y_measured: np.ndarray,
+    step_length: float = 0.1,
+) -> np.ndarray:
+    y_predicted = predict(
+        state_space_equation=state_space_equation,
+        initial_state=initial_state,
+        inputs=inputs,
+        step_length=step_length,
+        parameters=parameters,
+        normalize_quaternions=normalize_quaternions,
+    )
+    if np.isnan(y_predicted).any():
+        return np.full(len(initial_state), NAN_FILLER)
+    else:
+        return mean_absolute_error(y_measured, y_predicted)
 
 
 @njit
@@ -172,8 +195,8 @@ def calculate_pareto_front(
     tau,
     y_measured,
     x0,
-    xl: np.ndarray,
-    xu: np.ndarray,
+    xl: Union[np.ndarray, None],
+    xu: Union[np.ndarray, None],
     n_var: int,
     n_obj: int,
     normalize_quaternions: bool,
@@ -183,7 +206,7 @@ def calculate_pareto_front(
     verbose=True,
     save_history=False,
     display=MyDisplay(),
-):
+) -> Result:
 
     # calculate pareto frontier
     problem = UUVParameterProblem(
@@ -206,7 +229,7 @@ def calculate_pareto_front(
     res = minimize(
         problem,
         algorithm,
-        termination,
+        # termination,
         verbose=verbose,
         display=display,
         save_history=save_history,
@@ -214,3 +237,13 @@ def calculate_pareto_front(
     )
 
     return res
+
+@njit
+def samples_for_linear_surge_model():
+    M = np.linspace(0.1, 100)
+    D = np.linspace(0.1, 100)
+    
+    for i in prange(len(M)):
+        for j in range(len(D)):
+            
+    
