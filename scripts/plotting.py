@@ -1,34 +1,22 @@
 from pathlib import Path
 from typing import Callable
+from matplotlib.colors import BoundaryNorm, Normalize, LogNorm
+from matplotlib.ticker import LogLocator, FixedLocator, FixedFormatter
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from auv_models import auv_1DOF_simplified
-from helper import ETA_DOFS, NU_DOFS, DFKeys, PARAM_EST_DIR
-from parameter_estimation import calculate_pareto_front, predict
-
-
-def plot_predict(
-    state_space_equation: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
-    initial_state: np.ndarray,
-    inputs: np.ndarray,
-    parameters: np.ndarray,
-    y_measured: np.ndarray,
-    timesteps: np.ndarray,
-):
-    y_predicted = predict(state_space_equation, initial_state, inputs, 0.1, parameters)
-    dofs = ETA_DOFS + NU_DOFS
-    for dof, i in zip(dofs, range(len(dofs))):
-        plt.plot(timesteps, y_predicted[:, i], label="predicted")
-        plt.plot(timesteps, y_measured[:, i], label="measured")
-        plt.title(dof)
-        plt.legend()
-        plt.savefig(
-            "results/parameter_estimation/slow_diagonal_model/trials/%s.jpg" % dof
-        )
-        plt.close()
+from auv_models import linear_surge
+from helper import (
+    ETA_DOFS,
+    NU_DOFS,
+    DFKeys,
+    PARAM_EST_DIR,
+    PARAM_EST_SIM_DIR,
+    normalize,
+)
+from parameter_estimation import calculate_pareto_front, predict, optimize_linear_surge
 
 
 def plot_synthetic_data():
@@ -52,10 +40,10 @@ def plot_synthetic_data():
         plt.close()
 
 
-def plot_objective_function():
+def plot_pareto_front():
     READ_DIR = PARAM_EST_DIR / "linear_surge_model" / "m30_d30"
-    resX = pd.read_csv(READ_DIR / "resX.csv").to_numpy()
-    resF = pd.read_csv(READ_DIR / "resF.csv").to_numpy()
+    resX = pd.read_csv(READ_DIR / "resX.csv", header=None).to_numpy()
+    resF = pd.read_csv(READ_DIR / "resF.csv", header=None).to_numpy()
 
     plt.scatter(resX[0], resX[1], c=resF[0] + resF[1])
     plt.title("Final population")
@@ -64,5 +52,37 @@ def plot_objective_function():
     plt.show()
 
 
+def plot_objective_function():
+    read_dir = Path("results/objective_function/linear_surge/long_tau")
+    M = pd.read_csv(read_dir / "M.csv", header=None).to_numpy()
+    D = pd.read_csv(read_dir / "D.csv", header=None).to_numpy()
+    F = pd.read_csv(read_dir / "f.csv", header=None).to_numpy()
+    resX = pd.read_csv(read_dir / "resX.csv", header=None).to_numpy()
+    resF = pd.read_csv(read_dir / "resF.csv", header=None).to_numpy()
+
+    X, Y = np.meshgrid(M, D)
+    levels = [0.01]
+    for i in range(25):
+        levels.append(round(1.5 * levels[i], 3))
+    cf = plt.contourf(
+        X,
+        Y,
+        F,
+        locator=FixedLocator(levels),
+        cmap=plt.get_cmap("Oranges"),
+        norm=LogNorm(vmin=0.01, vmax=100, clip=True),
+        extend="both",
+    )
+    plt.colorbar(cf, format="%.3f")
+    plt.xlabel("Mass (kg)")
+    plt.ylabel("Damping")
+
+    plt.scatter(resX[:, 0], resX[:, 1])
+
+    # plt.savefig(read_dir / "objective_long_tau.pdf")
+    plt.show()
+
+
 if __name__ == "__main__":
+    # optimize_linear_surge()
     plot_objective_function()

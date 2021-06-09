@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from auv_models import auv_1DOF_simplified, diagonal_slow_without_g, diagonal_slow
+from auv_models import linear_surge, diagonal_slow_without_g, diagonal_slow
 from helper import *
 from parameter_estimation import *
 
@@ -27,7 +27,7 @@ class SyntheticDiagonalSlowWithoutGTests(unittest.TestCase):
         x0 = np.array(eta_init + nu_init, dtype=np.float64)
 
         y_measured = predict(
-            diagonal_slow_without_g, x0, tau, 0.1, theta, normalize_quaternions=True
+            diagonal_slow_without_g, x0, tau, theta, normalize_quaternions=True
         )
 
         x_lower = np.empty(20, dtype=np.float64)
@@ -63,10 +63,10 @@ class SyntheticDiagonalSlowWithoutGTests(unittest.TestCase):
         )
 
         # save results
-        save_dir = PARAM_EST_DIR / "synthetic"
+        save_dir = PARAM_EST_SIM_DIR / "diagonal_slow_noG_model" / "theta_1"
         Path.mkdir(save_dir, parents=True, exist_ok=True)
-        pd.DataFrame(res.X).to_csv(save_dir / "diagonal_slow_no_g_resX.csv")
-        pd.DataFrame(res.F).to_csv(save_dir / "diagonal_slow_no_g_resF.csv")
+        pd.DataFrame(res.X).to_csv(save_dir / "resX.csv", header=False, index=False)
+        pd.DataFrame(res.F).to_csv(save_dir / "resF.csv", header=False, index=False)
 
         found_params = False
         for design_point in res.X:
@@ -87,9 +87,7 @@ class SyntheticDiagonalSlowTests(unittest.TestCase):
         theta = np.array(M + D, dtype=np.float64)
         tau = load_tau(SYNTHETIC_DIR / "random-1.csv")
         x0 = np.array(eta_init + nu_init, dtype=np.float64)
-        y_measured = predict(
-            diagonal_slow, x0, tau, 0.1, theta, normalize_quaternions=True
-        )
+        y_measured = predict(diagonal_slow, x0, tau, theta, normalize_quaternions=True)
 
         x_lower = np.empty(n_var, dtype=np.float64)
         x_upper = np.empty(n_var, dtype=np.float64)
@@ -115,19 +113,10 @@ class SyntheticDiagonalSlowTests(unittest.TestCase):
         )
 
         # save results
-        save_dir = PARAM_EST_DIR / "synthetic"
+        save_dir = PARAM_EST_SIM_DIR / "diagonal_slow_model" / "theta_1"
         Path.mkdir(save_dir, parents=True, exist_ok=True)
-        pd.DataFrame(res.X).to_csv(save_dir / "diagonal_slow_resX.csv")
-        pd.DataFrame(res.F).to_csv(save_dir / "diagonal_slow_resF.csv")
-
-        # print best guess
-        scores = [np.sum(f) for f in res.F]
-        lowest_score = np.inf
-        best_i = None
-        for i, score in enumerate(scores):
-            if score < lowest_score:
-                best_i = i
-        print("Best guess: " + str(res.X[best_i]))
+        pd.DataFrame(res.X).to_csv(save_dir / "resX.csv", header=False, index=False)
+        pd.DataFrame(res.F).to_csv(save_dir / "resF.csv", header=False, index=False)
 
         found_params = False
         for design_point in res.X:
@@ -135,6 +124,28 @@ class SyntheticDiagonalSlowTests(unittest.TestCase):
                 found_params = True
                 break
         self.assertTrue(found_params)
+
+    def test_repeated_predicts(self):
+        M = [30, 60, 60, 10, 30, 30]
+        D = [30, 60, 60, 10, 30, 30]
+        eta_init = [0, 0, 0, 1, 0, 0, 0]
+        nu_init = [0, 0, 0, 0, 0, 0]
+        n_var = 12
+
+        theta = np.array(M + D, dtype=np.float64)
+        tau = load_tau(SYNTHETIC_DIR / "random-1.csv")
+        x0 = np.array(eta_init + nu_init, dtype=np.float64)
+
+        y1 = predict(diagonal_slow, x0, tau, theta, normalize_quaternions=True)
+        y2 = predict(diagonal_slow, x0, tau, theta, normalize_quaternions=True)
+        for i in range(1000):
+            y2 = predict(diagonal_slow, x0, tau, theta, normalize_quaternions=True)
+
+        almost_equal = np.allclose(y1, y2)
+        equal = (y1 == y2).all()
+
+        self.assertTrue(almost_equal)
+        self.assertTrue(equal)
 
 
 class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
@@ -155,13 +166,13 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
 
         x0 = np.array([0, 0], dtype=np.float64)
 
-        y_measured = predict(auv_1DOF_simplified, x0, tau, 0.1, theta, False)
+        y_measured = predict(linear_surge, x0, tau, theta, False)
 
         x_lower = np.array([1, 1], dtype=np.float64)
         x_upper = np.array([100, 100], dtype=np.float64)
 
         res = calculate_pareto_front(
-            auv_1DOF_simplified,
+            linear_surge,
             tau,
             y_measured,
             x0,
@@ -171,15 +182,12 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
             n_obj=2,
             normalize_quaternions=False,
         )
-        pareto_X, pareto_F = naive_pareto(res.X, res.F)
 
         # save results
         save_dir = PARAM_EST_SIM_DIR / "linear_surge_model" / ("m%i_d%i" % (m, d))
         Path.mkdir(save_dir, parents=True, exist_ok=True)
-        pd.DataFrame(res.X).to_csv(save_dir / "resX.csv")
-        pd.DataFrame(res.F).to_csv(save_dir / "resF.csv")
-        pd.DataFrame(pareto_X).to_csv(save_dir / "pareto_X.csv")
-        pd.DataFrame(pareto_F).to_csv(save_dir / "pareto_F.csv")
+        pd.DataFrame(res.X).to_csv(save_dir / "resX.csv", header=False, index=False)
+        pd.DataFrame(res.F).to_csv(save_dir / "resF.csv", header=False, index=False)
 
         found_params = False
         for design_point in res.X:
@@ -189,7 +197,7 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
         self.assertTrue(found_params)
 
     def test_if_resX_is_pareto(self):
-        for i in range(6):
+        for i in range(5):
             m = 30
             d = 30
             theta = np.array([m, d], dtype=np.float64)
@@ -206,13 +214,13 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
 
             x0 = np.array([0, 0], dtype=np.float64)
 
-            y_measured = predict(auv_1DOF_simplified, x0, tau, 0.1, theta, False)
+            y_measured = predict(linear_surge, x0, tau, theta, False)
 
             x_lower = np.array([1, 1], dtype=np.float64)
             x_upper = np.array([100, 100], dtype=np.float64)
 
             res = calculate_pareto_front(
-                auv_1DOF_simplified,
+                linear_surge,
                 tau,
                 y_measured,
                 x0,
@@ -226,6 +234,33 @@ class SyntheticOneDimensionalSimplifiedTests(unittest.TestCase):
 
             self.assertTrue(np.allclose(res.X, pareto_X))
             self.assertTrue(np.allclose(res.F, pareto_F))
+
+    def test_resX_and_pareto(self):
+
+        dir = Path("results/objective_function/linear_surge")
+        X = pd.read_csv(dir / "resX.csv", header=None).to_numpy()
+        F = pd.read_csv(dir / "resF.csv", header=None).to_numpy()
+
+        pareto_X, pareto_F = naive_pareto(X, F)
+
+        self.assertTrue(np.allclose(X, pareto_X))
+        self.assertTrue(np.allclose(F, pareto_F))
+
+    def test_knee_points_contain_theta(self):
+        dir = Path("results/objective_function/linear_surge/long_tau")
+        X = pd.read_csv(dir / "resX.csv", header=None).to_numpy()
+        F = pd.read_csv(dir / "resF.csv", header=None).to_numpy()
+        theta = pd.read_csv(dir / "theta.csv", header=None).to_numpy()[:, 0]
+
+        knee_points = get_knee_point(F)
+        theta_knees = X[knee_points]
+
+        found_theta = False
+        for theta_knee in theta_knees:
+            if np.allclose(theta, theta_knee, atol=0.1):
+                found_theta = True
+                break
+        self.assertTrue(found_theta)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import helper
 
 
 @njit
-def auv_1DOF_simplified(
+def linear_surge(
     state: np.ndarray, thrust: np.ndarray, parameters: np.ndarray
 ) -> np.ndarray:
     """AUV equation of motion for low velocities in 1DOF (surge)

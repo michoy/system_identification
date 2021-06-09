@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import count
 
-from auv_models import auv_1DOF_simplified, diagonal_slow_without_g
+from auv_models import linear_surge, diagonal_slow_without_g
 from helper import DFKeys, ETA_DOFS, NU_DOFS, SYNTHETIC_DIR, TAU_DOFS
 from parameter_estimation import predict
 
@@ -60,4 +60,4 @@ if __name__ == "__main__":
 
     save_name = "only_surge.csv"
 
-    synthesize_dataset(auv_1DOF_simplified, x0, theta, tau, columns, False, save_name)
+    synthesize_dataset(linear_surge, x0, theta, tau, columns, False, save_name)

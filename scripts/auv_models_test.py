@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from auv_models import auv_1DOF_simplified, diagonal_slow_without_g
+from auv_models import linear_surge, diagonal_slow_without_g
 from helper import degrees_to_quat_rotation
 
 
@@ -18,7 +18,7 @@ class SimplifiedSurgeAUVTest(unittest.TestCase):
         thrust = np.array([tau])
         parameters = np.array([m, d])
 
-        result = auv_1DOF_simplified(state, thrust, parameters)
+        result = linear_surge(state, thrust, parameters)
         self.assertTrue(np.allclose(result, np.array([0.1, -0.1])))
 
 
