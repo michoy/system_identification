@@ -392,3 +392,29 @@ def naive_pareto(X: ndarray, F: ndarray) -> Tuple[ndarray, ndarray]:
             pareto_x.append(x)
             pareto_y.append(f)
     return (np.array(pareto_x), np.array(pareto_y))
+
+
+def all_similar(A: ndarray) -> bool:
+    for i, a in enumerate(A):
+        for j, b in enumerate(A):
+            if i == j:
+                continue
+            if not np.allclose(a, b, atol=0.001):
+                return False
+    return True
+
+
+def X_ramp(amp=30) -> list:
+    pause = [0 for _i in range(100)]
+    power = lambda a: [a for _i in range(200)]
+    return pause + power(amp) + pause
+
+
+def X_better_ramp() -> list:
+    pause = [0 for _i in range(100)]
+    power = lambda a: [a for _i in range(200)]
+    return pause + power(10) + pause + power(30) + pause + power(60) + pause
+
+
+def X_sin(amp=30, duration=600) -> list:
+    return [amp * np.sin(x / (6 * np.pi)) for x in range(duration)]
