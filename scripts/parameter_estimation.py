@@ -12,7 +12,7 @@ import seaborn as sns
 from numba import njit, prange
 from numpy import float64, ndarray
 from pymoo.algorithms.nsga2 import NSGA2
-from pymoo.factory import get_decision_making, get_sampling
+from pymoo.factory import get_decision_making, get_sampling, get_termination
 from pymoo.model.callback import Callback
 from pymoo.model.problem import Problem
 from pymoo.model.result import Result
@@ -26,7 +26,12 @@ from pymoo.util.termination.default import MultiObjectiveDefaultTermination
 from pymoo.util.termination.f_tol import MultiObjectiveSpaceToleranceTermination
 from pymoo.util.termination.x_tol import DesignSpaceToleranceTermination
 
-from auv_models import diagonal_slow, diagonal_slow_without_g, linear_surge
+from auv_models import (
+    diagonal_slow,
+    diagonal_slow_without_g,
+    linear_surge,
+    nonlinear_surge,
+)
 from helper import (
     ETA_DOFS,
     NU_DOFS,
@@ -35,8 +40,13 @@ from helper import (
     TAU_DOFS,
     DFKeys,
     X_better_ramp,
+    X_many_sin,
     X_ramp,
     X_sin,
+    X_single_ramp,
+    X_single_sin,
+    X_sinousoidals,
+    X_triple_ramp,
     is_poistive_def,
     load_data,
     load_tau,
@@ -48,7 +58,7 @@ from helper import (
     numpy_from_df,
     profile,
 )
-from plotting import plot_objective_function
+from plotting import plot_surge_timeseries, plot_objective_function
 
 NAN_FILLER = 100000.0
 
@@ -112,7 +122,7 @@ class MyCallback(Callback):
         self.opt.append(algorithm.opt[0].F)
 
 
-@njit(parallel=True)
+@njit
 def compiled_evaluation(
     designs,
     state_space_equation,
@@ -177,6 +187,7 @@ def predict(
     x = initial_state.copy()
     i = 0
     states[i, :] = x
+    x_dot_limit = 10  # m/s or rad/s
 
     for u in inputs[0 : len(inputs) - 1]:
 
@@ -184,20 +195,46 @@ def predict(
         x_dot = state_space_equation(x, u, parameters) * step_length
 
         # return none if state space equation reached an illegal state
-        if np.isnan(x_dot).any() or np.isinf(x_dot).any():
+        if (
+            np.isnan(x_dot).any()
+            or np.isinf(x_dot).any()
+            or (np.abs(x_dot) > x_dot_limit).any()
+        ):
             states[:] = np.nan
             return states
 
         x += x_dot
 
         # normalize quaternions
-        # x = normalizer(x, normalize_quaternions)
+        x = normalizer(x, normalize_quaternions)
 
         # save current state
         i += 1
         states[i, :] = x
 
     return states
+
+
+def minimal_calculate_pf(eom, tau, y, xl, xu, norm_quats=False, pop_size=None):
+    if not pop_size:
+        pop_size = 10 ** len(xl)
+
+    return calculate_pareto_front(
+        eom,
+        tau,
+        y,
+        x0=y[0],
+        xl=np.array(xl, dtype=float64),
+        xu=np.array(xu, dtype=float64),
+        n_var=len(xl),
+        n_obj=len(y[0]),
+        normalize_quaternions=norm_quats,
+        n_constr=0,
+        pop_size=pop_size,
+        n_max_gen=1000,
+        verbose=True,
+        display=MyDisplay(),
+    )
 
 
 def calculate_pareto_front(
@@ -232,22 +269,65 @@ def calculate_pareto_front(
     )
     algorithm = NSGA2(
         pop_size=pop_size,
-        n_offsprings=int(pop_size / 2),
+        # n_offsprings=int(pop_size / 2),
         crossover=SimulatedBinaryCrossover(eta=15, prob=0.9),
-        mutation=PolynomialMutation(prob=None, eta=20),
+        mutation=PolynomialMutation(prob=None, eta=15),
     )
     termination_default = MultiObjectiveDefaultTermination(n_max_gen=n_max_gen)
     termination_design_space = DesignSpaceToleranceTermination(n_max_gen=n_max_gen)
+    termination_generations = get_termination("n_gen", 100)
 
     res = minimize(
         problem,
         algorithm,
-        termination_design_space,
+        termination_default,
         verbose=verbose,
         display=display,
     )
 
     return res
+
+
+def save_res(res, eom, tau, y, dir: Path, theta=None):
+    if res:
+        pd.DataFrame(res.X).to_csv(dir / "resX.csv", header=False, index=False)
+        pd.DataFrame(res.F).to_csv(dir / "resF.csv", header=False, index=False)
+        pd.DataFrame(tau).to_csv(dir / "tau.csv", header=False, index=False)
+        pd.DataFrame(y).to_csv(dir / "y.csv", header=False, index=False)
+        if theta:
+            pd.DataFrame(theta).to_csv(dir / "theta.csv", header=False, index=False)
+
+        try:
+            I = get_knee_point(res.F)
+            knee_points = res.X[I]
+            pd.DataFrame(knee_points).to_csv(
+                dir / "knee_points.csv", header=False, index=False
+            )
+            for i, kp in enumerate(knee_points):
+                y_hat = predict(
+                    state_space_equation=eom,
+                    initial_state=y[0],
+                    inputs=tau,
+                    parameters=kp,
+                    normalize_quaternions=False,
+                )
+                pd.DataFrame(y_hat).to_csv(
+                    dir / ("y_hat-kp%i.csv" % i), header=False, index=False
+                )
+        except:
+            print("could not compute knee points. Using first from resX instead")
+            y_hat = predict(
+                state_space_equation=eom,
+                initial_state=y[0],
+                inputs=tau,
+                parameters=res.X[0],
+                normalize_quaternions=False,
+            )
+            pd.DataFrame(y_hat).to_csv(
+                dir / "y_hat-resX.csv", header=False, index=False
+            )
+    else:
+        print("did not optimize %s" % dir.name)
 
 
 def get_knee_point(F: ndarray) -> ndarray:
@@ -261,8 +341,8 @@ def samples_for_linear_surge_model(tau, theta, save_dir):
     theta = np.copy(theta)
     x0 = np.array([0, 0], dtype=np.float64)
 
-    M = np.linspace(75, 125, 100, dtype=np.float64)
-    D = np.linspace(9, 11, 100, dtype=np.float64)
+    M = np.linspace(10, 120, 100, dtype=np.float64)
+    D = np.linspace(10, 30, 50, dtype=np.float64)
 
     y = predict(
         state_space_equation=linear_surge,
@@ -271,7 +351,7 @@ def samples_for_linear_surge_model(tau, theta, save_dir):
         parameters=theta,
         normalize_quaternions=False,
     )
-    f = np.empty((len(M), len(D)))
+    f = np.empty((len(D), len(M)))
     for i, m in enumerate(M):
         for j, d in enumerate(D):
             theta[0] = m
@@ -305,8 +385,8 @@ def optimize_linear_surge(tau, theta, save_dir):
         normalize_quaternions=False,
     )
 
-    xl = np.array([75, 9], dtype=float64)
-    xu = np.array([125, 11], dtype=float64)
+    xl = np.array([10, 1], dtype=float64)
+    xu = np.array([120, 20], dtype=float64)
     res = calculate_pareto_front(
         linear_surge,
         tau,
@@ -317,7 +397,7 @@ def optimize_linear_surge(tau, theta, save_dir):
         n_var=2,
         n_obj=2,
         normalize_quaternions=False,
-        pop_size=100,
+        pop_size=200,
     )
 
     if res:
@@ -325,6 +405,7 @@ def optimize_linear_surge(tau, theta, save_dir):
         pd.DataFrame(res.F).to_csv(save_dir / "resF.csv", header=False, index=False)
         pd.DataFrame(theta).to_csv(save_dir / "theta.csv", header=False, index=False)
         pd.DataFrame(tau).to_csv(save_dir / "tau.csv", header=False, index=False)
+        pd.DataFrame(y).to_csv(save_dir / "y.csv", header=False, index=False)
 
     try:
         I = get_knee_point(res.F)
@@ -332,8 +413,86 @@ def optimize_linear_surge(tau, theta, save_dir):
         pd.DataFrame(knee_points).to_csv(
             save_dir / "knee_points.csv", header=False, index=False
         )
+        if len(knee_points) == 1:
+            kp = knee_points[0]
+            y_hat = predict(
+                state_space_equation=linear_surge,
+                initial_state=x0,
+                inputs=tau,
+                parameters=kp,
+                normalize_quaternions=False,
+            )
+            pd.DataFrame(y_hat).to_csv(
+                save_dir / "y_hat.csv", header=False, index=False
+            )
     except:
         print("could not compute knee points")
+
+
+def optimize(
+    EOM,
+    tau: ndarray,
+    theta: ndarray,
+    initial_states: list,
+    xl: list,
+    xu: list,
+    dir: Path,
+    normalize_quaternions=False,
+):
+
+    tau = np.copy(tau)
+    theta = np.copy(theta)
+    x0 = np.array(initial_states, dtype=float64)
+
+    y = predict(
+        state_space_equation=EOM,
+        initial_state=x0,
+        inputs=tau,
+        parameters=theta,
+        normalize_quaternions=False,
+    )
+
+    res = calculate_pareto_front(
+        EOM,
+        tau,
+        y,
+        x0,
+        xl=np.array(xl, dtype=float64),
+        xu=np.array(xu, dtype=float64),
+        n_var=len(xl),
+        n_obj=len(x0),
+        normalize_quaternions=normalize_quaternions,
+        pop_size=10 ** len(xl),
+    )
+
+    if res:
+        pd.DataFrame(res.X).to_csv(dir / "resX.csv", header=False, index=False)
+        pd.DataFrame(res.F).to_csv(dir / "resF.csv", header=False, index=False)
+        pd.DataFrame(theta).to_csv(dir / "theta.csv", header=False, index=False)
+        pd.DataFrame(tau).to_csv(dir / "tau.csv", header=False, index=False)
+        pd.DataFrame(y).to_csv(dir / "y.csv", header=False, index=False)
+
+        try:
+            I = get_knee_point(res.F)
+            knee_points = res.X[I]
+            pd.DataFrame(knee_points).to_csv(
+                dir / "knee_points.csv", header=False, index=False
+            )
+            for i, kp in enumerate(knee_points):
+                y_hat = predict(
+                    state_space_equation=EOM,
+                    initial_state=x0,
+                    inputs=tau,
+                    parameters=kp,
+                    normalize_quaternions=False,
+                )
+                pd.DataFrame(y_hat).to_csv(
+                    dir / ("y_hat-kp%i.csv" % i), header=False, index=False
+                )
+        except:
+            print("could not compute knee points")
+    else:
+        print("Optimazation of %s failed" % dir.name)
 
 
 def linear_surge_plot_prep_thetas():
@@ -367,45 +526,118 @@ def linear_surge_plot_prep_thetas():
     plot_objective_function(save_dir)
 
 
-def linear_surge_plot_prep_taus():
+def linear_surge_taus():
 
-    tau_single_ramp = np.array([[x, 0, 0, 0, 0, 0] for x in X_ramp()], dtype=np.float64)
+    tau_single_ramp = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_single_ramp], dtype=np.float64
+    )
     tau_triple_ramp = np.array(
-        [[x, 0, 0, 0, 0, 0] for x in X_better_ramp()], dtype=np.float64
+        [[x, 0, 0, 0, 0, 0] for x in X_triple_ramp], dtype=np.float64
     )
-    tau_sin400 = np.array(
-        [[x, 0, 0, 0, 0, 0] for x in X_sin(duration=400)], dtype=np.float64
+    tau_single_sin = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_single_sin],
+        dtype=np.float64,
     )
-    tau_sin800 = np.array(
-        [[x, 0, 0, 0, 0, 0] for x in X_sin(duration=800)], dtype=np.float64
+    tau_many_sin = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_many_sin],
+        dtype=np.float64,
     )
-    tau_sin1600 = np.array(
-        [[x, 0, 0, 0, 0, 0] for x in X_sin(duration=1600)], dtype=np.float64
-    )
-    taus = [tau_single_ramp, tau_triple_ramp, tau_sin800, tau_sin1600]
-    names = ["tau_single_ramp", "tau_triple_ramp", "tau_sin800", "tau_sin1600"]
 
-    m = 10
-    d = 10
-    theta = np.array([m, d], dtype=np.float64)
+    taus = [
+        tau_single_ramp,
+        tau_single_sin,
+        tau_many_sin,
+        tau_triple_ramp,
+    ]
+    names = [
+        "tau_single_ramp",
+        "tau_single_sin",
+        "tau_many_sin",
+        "tau_triple_ramp",
+    ]
+
+    m = 60
+    d_l = 20
+    theta = np.array([m, d_l], dtype=np.float64)
 
     for tau, name in zip(taus, names):
 
-        save_dir = Path("results/objective_function/linear_surge/%s" % name)
+        save_dir = Path("results/simulations/linear_surge/%s" % name)
         Path.mkdir(save_dir, parents=True, exist_ok=True)
 
         samples_for_linear_surge_model(tau, theta, save_dir)
-        optimize_linear_surge(tau, theta, save_dir)
 
-        plot_objective_function(save_dir)
+        # optimize(
+        #     EOM=linear_surge,
+        #     tau=tau,
+        #     theta=theta,
+        #     initial_states=[0, 0],
+        #     xl=[10, 1],
+        #     xu=[120, 40],
+        #     dir=save_dir,
+        # )
 
-    # save_dir = Path("results/objective_function/linear_surge/%s" % names[-1])
-    # Path.mkdir(save_dir, parents=True, exist_ok=True)
+        try:
+            # plot_surge_timeseries(save_dir)
+            plot_objective_function(save_dir)
+        except:
+            print("No timeseries plotted for %s" % name)
 
-    # samples_for_linear_surge_model(taus[-1], theta, save_dir)
-    # optimize_linear_surge(taus[-1], theta, save_dir)
 
-    # plot_objective_function(save_dir)
+def nonlinear_surge_taus():
+
+    tau_single_ramp = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_single_ramp], dtype=np.float64
+    )
+    tau_triple_ramp = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_triple_ramp], dtype=np.float64
+    )
+    tau_single_sin = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_single_sin],
+        dtype=np.float64,
+    )
+    tau_many_sin = np.array(
+        [[x, 0, 0, 0, 0, 0] for x in X_many_sin],
+        dtype=np.float64,
+    )
+
+    taus = [
+        tau_single_ramp,
+        tau_single_sin,
+        tau_many_sin,
+        tau_triple_ramp,
+    ]
+    names = [
+        "tau_single_ramp",
+        "tau_single_sin",
+        "tau_many_sin",
+        "tau_triple_ramp",
+    ]
+
+    m = 60
+    d_l = 20
+    d_nl = 2
+    theta = np.array([m, d_l, d_nl], dtype=np.float64)
+
+    for tau, name in zip(taus, names):
+
+        save_dir = Path("results/simulations/nonlinear_surge-run-b/%s" % name)
+        Path.mkdir(save_dir, parents=True, exist_ok=True)
+
+        optimize(
+            EOM=nonlinear_surge,
+            tau=tau,
+            theta=theta,
+            initial_states=[0, 0],
+            xl=[10, 1, 0],
+            xu=[120, 40, 10],
+            dir=save_dir,
+        )
+
+        try:
+            plot_surge_timeseries(save_dir)
+        except:
+            print("No timeseries plotted for %s" % name)
 
 
 def linear_surge_single_plot_prep():
@@ -453,7 +685,36 @@ def predict_computation_time():
     )
 
 
-@njit(parallel=True)
+def surge_test_identification():
+    # load data
+    run_path = Path("data/preprocessed/surge-1.csv")
+
+    t_start, t_end = 410, 650
+    df = pd.read_csv(run_path)
+    df = df[df[DFKeys.TIME.value] > t_start]
+    df = df[df[DFKeys.TIME.value] < t_end]
+
+    y = df[[DFKeys.POSITION_X.value, DFKeys.SURGE.value]].to_numpy()
+    X = df[DFKeys.FORCE_X.value].to_numpy()
+    tau = np.array([[x, 0, 0, 0, 0, 0] for x in X], dtype=np.float64)
+
+    y = y * np.array([-1, 1])  # beluga was rotated 180 deg
+
+    # estimate
+    res = minimal_calculate_pf(
+        nonlinear_surge, tau, y, xl=[10, 0, 0], xu=[1000, 1000, 1000]
+    )
+
+    # save results
+    save_dir = Path("results/parameter_estimation/surge-1/nonlinear_surge_long_run")
+    Path.mkdir(save_dir, parents=True, exist_ok=True)
+    save_res(res, nonlinear_surge, tau, y, save_dir)
+
+    # plot results
+    plot_surge_timeseries(save_dir)
+
+
+@njit
 def repeated_predicts(num: int, x0: ndarray, tau: ndarray, theta: ndarray):
     for _i in prange(num):
         predict(
@@ -466,4 +727,6 @@ def repeated_predicts(num: int, x0: ndarray, tau: ndarray, theta: ndarray):
 
 
 if __name__ == "__main__":
-    predict_computation_time()
+    surge_test_identification()
+    # nonlinear_surge_taus()
+    # linear_surge_taus()
